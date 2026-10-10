@@ -1,0 +1,6 @@
+{
+  "name": "AudioBook Reader",
+  "description": "Lector de audiolibros inteligente que convierte documentos PDF en voz natural con resaltado de texto, control de velocidad y biblioteca personal.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
