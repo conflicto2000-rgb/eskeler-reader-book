@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LocalLibrary
 import androidx.compose.material.icons.filled.Settings
@@ -53,7 +54,9 @@ import com.example.ui.AudioBookViewModel
 import com.example.ui.components.ImportProgressDialog
 import com.example.ui.components.MiniPlayer
 import com.example.ui.screens.home.HomeScreen
+import com.example.ui.screens.lens.LensReaderScreen
 import com.example.ui.screens.library.LibraryScreen
+import com.example.ui.screens.pdf.PdfReaderScreen
 import com.example.ui.screens.player.PlayerScreen
 import com.example.ui.screens.review.TextReviewScreen
 import com.example.ui.screens.settings.SettingsScreen
@@ -65,7 +68,7 @@ import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
 
 enum class AppScreen {
-    HOME, LIBRARY, SETTINGS, PLAYER, REVIEW
+    HOME, LIBRARY, SETTINGS, PLAYER, REVIEW, LENS, PDF_READER
 }
 
 class MainActivity : ComponentActivity() {
@@ -107,6 +110,9 @@ fun MainApp(viewModel: AudioBookViewModel) {
     val fontSize by viewModel.readerFontSize.collectAsStateWithLifecycle()
     val readerTheme by viewModel.readerTheme.collectAsStateWithLifecycle()
 
+    val readingStats by viewModel.readingStats.collectAsStateWithLifecycle()
+    val bookmarkedPages by viewModel.bookmarkedPages.collectAsStateWithLifecycle()
+
     val isImporting by viewModel.isImporting.collectAsStateWithLifecycle()
     val importProgress by viewModel.importProgress.collectAsStateWithLifecycle()
     val importStatusText by viewModel.importStatusText.collectAsStateWithLifecycle()
@@ -116,7 +122,6 @@ fun MainApp(viewModel: AudioBookViewModel) {
     val selectedPreprocessingMode by viewModel.selectedPreprocessingMode.collectAsStateWithLifecycle()
     val ocrEngineStatus by viewModel.ocrEngineStatus.collectAsStateWithLifecycle()
 
-    // PDF File Picker Launcher
     val pdfPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -128,14 +133,14 @@ fun MainApp(viewModel: AudioBookViewModel) {
                     fileName = cursor.getString(nameIndex) ?: "documento.pdf"
                 }
             }
-            viewModel.importPdf(it, fileName) { _ ->
-                currentScreen = AppScreen.REVIEW
+            viewModel.importPdf(it, fileName) { importedBook ->
+                viewModel.openBookForPdf(importedBook)
+                currentScreen = AppScreen.PDF_READER
             }
         }
     }
 
-    // Back handling
-    BackHandler(enabled = currentScreen == AppScreen.PLAYER || currentScreen == AppScreen.REVIEW) {
+    BackHandler(enabled = currentScreen != AppScreen.HOME) {
         currentScreen = AppScreen.HOME
     }
 
@@ -145,15 +150,14 @@ fun MainApp(viewModel: AudioBookViewModel) {
             containerColor = DarkBackground,
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
-                if (currentScreen != AppScreen.PLAYER && currentScreen != AppScreen.REVIEW) {
+                if (currentScreen != AppScreen.PLAYER && currentScreen != AppScreen.REVIEW && currentScreen != AppScreen.PDF_READER) {
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
                             .windowInsetsPadding(WindowInsets.navigationBars)
                     ) {
-                        // Floating MiniPlayer if active book exists
                         AnimatedVisibility(
-                            visible = currentBook != null,
+                            visible = currentBook != null && currentScreen != AppScreen.LENS,
                             enter = slideInVertically(initialOffsetY = { it }) + fadeIn(),
                             exit = slideOutVertically(targetOffsetY = { it }) + fadeOut()
                         ) {
@@ -162,23 +166,21 @@ fun MainApp(viewModel: AudioBookViewModel) {
                                     book = book,
                                     isPlaying = isPlaying,
                                     onTogglePlay = { viewModel.togglePlayPause() },
-                                    onSkipNext = { viewModel.nextParagraph() },
+                                    onNextParagraph = { viewModel.nextParagraph() },
                                     onClick = { currentScreen = AppScreen.PLAYER }
                                 )
                             }
                         }
 
-                        // Bottom Navigation Bar
                         NavigationBar(
                             containerColor = DarkSurface,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("bottom_nav_bar")
+                            contentColor = TextPrimary,
+                            tonalElevation = 8.dp
                         ) {
                             NavigationBarItem(
                                 selected = currentScreen == AppScreen.HOME,
                                 onClick = { currentScreen = AppScreen.HOME },
-                                icon = { Icon(Icons.Default.Home, contentDescription = "Inicio") },
+                                icon = { Icon(imageVector = Icons.Default.Home, contentDescription = "Inicio") },
                                 label = { Text("Inicio") },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Color.Black,
@@ -186,14 +188,27 @@ fun MainApp(viewModel: AudioBookViewModel) {
                                     indicatorColor = ElectricCyan,
                                     unselectedIconColor = TextSecondary,
                                     unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_home")
+                                )
+                            )
+
+                            NavigationBarItem(
+                                selected = currentScreen == AppScreen.LENS,
+                                onClick = { currentScreen = AppScreen.LENS },
+                                icon = { Icon(imageVector = Icons.Default.CameraAlt, contentDescription = "Lens Reader") },
+                                label = { Text("Lens") },
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = Color.Black,
+                                    selectedTextColor = ElectricCyan,
+                                    indicatorColor = ElectricCyan,
+                                    unselectedIconColor = TextSecondary,
+                                    unselectedTextColor = TextSecondary
+                                )
                             )
 
                             NavigationBarItem(
                                 selected = currentScreen == AppScreen.LIBRARY,
                                 onClick = { currentScreen = AppScreen.LIBRARY },
-                                icon = { Icon(Icons.Default.LocalLibrary, contentDescription = "Biblioteca") },
+                                icon = { Icon(imageVector = Icons.Default.LocalLibrary, contentDescription = "Biblioteca") },
                                 label = { Text("Biblioteca") },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Color.Black,
@@ -201,14 +216,13 @@ fun MainApp(viewModel: AudioBookViewModel) {
                                     indicatorColor = ElectricCyan,
                                     unselectedIconColor = TextSecondary,
                                     unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_library")
+                                )
                             )
 
                             NavigationBarItem(
                                 selected = currentScreen == AppScreen.SETTINGS,
                                 onClick = { currentScreen = AppScreen.SETTINGS },
-                                icon = { Icon(Icons.Default.Settings, contentDescription = "Ajustes") },
+                                icon = { Icon(imageVector = Icons.Default.Settings, contentDescription = "Ajustes") },
                                 label = { Text("Ajustes") },
                                 colors = NavigationBarItemDefaults.colors(
                                     selectedIconColor = Color.Black,
@@ -216,18 +230,17 @@ fun MainApp(viewModel: AudioBookViewModel) {
                                     indicatorColor = ElectricCyan,
                                     unselectedIconColor = TextSecondary,
                                     unselectedTextColor = TextSecondary
-                                ),
-                                modifier = Modifier.testTag("nav_settings")
+                                )
                             )
                         }
                     }
                 }
             }
-        ) { innerPadding ->
+        ) { paddingValues ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(innerPadding)
+                    .padding(paddingValues)
             ) {
                 when (currentScreen) {
                     AppScreen.HOME -> {
@@ -235,13 +248,79 @@ fun MainApp(viewModel: AudioBookViewModel) {
                             books = allBooks,
                             currentBook = currentBook,
                             isPlaying = isPlaying,
+                            readingStats = readingStats,
                             onBookClick = { book ->
                                 viewModel.openBook(book, autoPlay = true)
                                 currentScreen = AppScreen.PLAYER
                             },
-                            onTogglePlay = { viewModel.togglePlayPause() },
+                            onOpenPdfReader = { book ->
+                                viewModel.openBookForPdf(book)
+                                currentScreen = AppScreen.PDF_READER
+                            },
+                            onAudiobooksClick = {
+                                if (currentBook != null) {
+                                    currentScreen = AppScreen.PLAYER
+                                } else if (allBooks.isNotEmpty()) {
+                                    viewModel.openBook(allBooks.first(), autoPlay = false)
+                                    currentScreen = AppScreen.PLAYER
+                                } else {
+                                    currentScreen = AppScreen.LIBRARY
+                                }
+                            },
                             onImportPdfClick = { pdfPickerLauncher.launch("application/pdf") },
-                            onNavigateLibrary = { currentScreen = AppScreen.LIBRARY }
+                            onLensReaderClick = { currentScreen = AppScreen.LENS },
+                            onReviewBook = { book ->
+                                viewModel.openBookForReview(book)
+                                currentScreen = AppScreen.REVIEW
+                            },
+                            onToggleFavorite = { viewModel.toggleFavorite(it) }
+                        )
+                    }
+
+                    AppScreen.PDF_READER -> {
+                        currentBook?.let { book ->
+                            PdfReaderScreen(
+                                book = book,
+                                paragraphs = currentParagraphs,
+                                bookmarkedPages = bookmarkedPages,
+                                isPlaying = isPlaying,
+                                selectedOcrLanguage = selectedOcrLanguage,
+                                selectedPreprocessingMode = selectedPreprocessingMode,
+                                isReprocessingPage = isReprocessingPage,
+                                onBackClick = { currentScreen = AppScreen.HOME },
+                                onPageChanged = { page -> viewModel.saveCurrentPage(page) },
+                                onToggleBookmark = { page -> viewModel.toggleBookmark(page) },
+                                onPlayPageText = { page -> viewModel.playPageTextWithTts(page) },
+                                onTogglePlay = { viewModel.togglePlayPause() },
+                                onOpenPlayer = { currentScreen = AppScreen.PLAYER },
+                                onReviewClick = { currentScreen = AppScreen.REVIEW },
+                                onOcrLanguageChange = { viewModel.setOcrLanguage(it) },
+                                onPreprocessingModeChange = { viewModel.setPreprocessingMode(it) },
+                                onReprocessPageWithOcr = { page, lang, mode ->
+                                    viewModel.reprocessPageWithOcr(page, lang, mode)
+                                }
+                            )
+                        } ?: run {
+                            currentScreen = AppScreen.HOME
+                        }
+                    }
+
+                    AppScreen.LENS -> {
+                        LensReaderScreen(
+                            selectedLanguage = selectedOcrLanguage,
+                            selectedMode = selectedPreprocessingMode,
+                            onLanguageChange = { viewModel.setOcrLanguage(it) },
+                            onModeChange = { viewModel.setPreprocessingMode(it) },
+                            onBackClick = { currentScreen = AppScreen.HOME },
+                            onSendToPlayer = { title, paragraphs, imagePath ->
+                                viewModel.saveLensReaderDocument(title, paragraphs, imagePath) { book ->
+                                    viewModel.openBook(book, autoPlay = true)
+                                    currentScreen = AppScreen.PLAYER
+                                }
+                            },
+                            onSamplePlayText = { sampleTxt ->
+                                viewModel.ttsManager.speak(sampleTxt)
+                            }
                         )
                     }
 
@@ -260,9 +339,14 @@ fun MainApp(viewModel: AudioBookViewModel) {
                                 viewModel.openBook(book, autoPlay = true)
                                 currentScreen = AppScreen.PLAYER
                             },
+                            onOpenPdfReader = { book ->
+                                viewModel.openBookForPdf(book)
+                                currentScreen = AppScreen.PDF_READER
+                            },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
                             onDeleteBook = { viewModel.deleteBook(it) },
                             onImportPdfClick = { pdfPickerLauncher.launch("application/pdf") },
+                            onLensReaderClick = { currentScreen = AppScreen.LENS },
                             onReviewBook = { book ->
                                 viewModel.openBookForReview(book)
                                 currentScreen = AppScreen.REVIEW
@@ -316,7 +400,13 @@ fun MainApp(viewModel: AudioBookViewModel) {
                             onFontSizeChange = { viewModel.setReaderFontSize(it) },
                             onReaderThemeChange = { viewModel.setReaderTheme(it) },
                             onToggleFavorite = { viewModel.toggleFavorite(it) },
-                            onReviewClick = { currentScreen = AppScreen.REVIEW }
+                            onReviewClick = { currentScreen = AppScreen.REVIEW },
+                            onOpenPdfReader = {
+                                currentBook?.let {
+                                    viewModel.openBookForPdf(it)
+                                    currentScreen = AppScreen.PDF_READER
+                                }
+                            }
                         )
                     }
 
@@ -352,7 +442,6 @@ fun MainApp(viewModel: AudioBookViewModel) {
             }
         }
 
-        // Import in-progress dialog
         if (isImporting) {
             ImportProgressDialog(
                 statusText = importStatusText,
@@ -361,7 +450,6 @@ fun MainApp(viewModel: AudioBookViewModel) {
             )
         }
 
-        // Import Error dialog
         importErrorMessage?.let { errorMsg ->
             AlertDialog(
                 onDismissRequest = { viewModel.clearImportError() },

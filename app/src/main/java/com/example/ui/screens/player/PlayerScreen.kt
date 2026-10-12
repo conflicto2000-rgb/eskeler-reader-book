@@ -1,5 +1,6 @@
 package com.example.ui.screens.player
 
+import android.speech.tts.Voice
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -7,7 +8,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -23,32 +23,37 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.Bedtime
-import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.automirrored.filled.MenuBook
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.DocumentScanner
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.FormatSize
-import androidx.compose.material.icons.filled.Forward10
-import androidx.compose.material.icons.filled.MoreVert
-import androidx.compose.material.icons.filled.Palette
+import androidx.compose.material.icons.filled.Headphones
+import androidx.compose.material.icons.filled.List
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.RecordVoiceOver
-import androidx.compose.material.icons.filled.Replay10
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.filled.Speed
-import androidx.compose.material.icons.filled.TextFields
+import androidx.compose.material.icons.filled.Timer
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
@@ -60,33 +65,26 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.data.model.Book
 import com.example.data.model.BookParagraphEntity
-import com.example.tts.TtsVoiceInfo
-import com.example.ui.ReaderThemeMode
-import com.example.ui.components.SleepTimerDialog
-import com.example.ui.components.SpeedSelectorDialog
-import com.example.ui.components.VoiceSelectorDialog
-import com.example.ui.components.WaveVisualizer
 import com.example.ui.theme.DarkBackground
+import com.example.ui.theme.DarkBorder
+import com.example.ui.theme.DarkBorderSubtle
 import com.example.ui.theme.DarkSurface
 import com.example.ui.theme.DarkSurfaceVariant
 import com.example.ui.theme.ElectricCyan
-import com.example.ui.theme.ElectricPurple
-import com.example.ui.theme.FavoriteRed
-import com.example.ui.theme.ReadingHighlight
-import com.example.ui.theme.ReadingHighlightBorder
+import com.example.ui.theme.ElectricCyanSubtle
+import com.example.ui.theme.ElectricCyanTrack
 import com.example.ui.theme.TextPrimary
 import com.example.ui.theme.TextSecondary
+import com.example.ui.theme.TextTertiary
+import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -96,11 +94,11 @@ fun PlayerScreen(
     currentParagraphIndex: Int,
     isPlaying: Boolean,
     speechRate: Float,
-    availableVoices: List<TtsVoiceInfo>,
-    selectedVoice: TtsVoiceInfo?,
+    availableVoices: List<Voice>,
+    selectedVoice: Voice?,
     sleepTimerMinutesLeft: Int?,
-    fontSize: Float,
-    readerTheme: ReaderThemeMode,
+    fontSize: Int,
+    readerTheme: String,
     onBackClick: () -> Unit,
     onTogglePlay: () -> Unit,
     onParagraphClick: (Int) -> Unit,
@@ -111,534 +109,405 @@ fun PlayerScreen(
     onNextChapter: () -> Unit,
     onPreviousChapter: () -> Unit,
     onSelectSpeed: (Float) -> Unit,
-    onSelectVoice: (TtsVoiceInfo) -> Unit,
-    onSamplePlay: (TtsVoiceInfo) -> Unit,
+    onSelectVoice: (Voice) -> Unit,
+    onSamplePlay: (Voice) -> Unit,
     onStartSleepTimer: (Int) -> Unit,
     onCancelSleepTimer: () -> Unit,
-    onFontSizeChange: (Float) -> Unit,
-    onReaderThemeChange: (ReaderThemeMode) -> Unit,
+    onFontSizeChange: (Int) -> Unit,
+    onReaderThemeChange: (String) -> Unit,
     onToggleFavorite: (Book) -> Unit,
     onReviewClick: () -> Unit,
-    modifier: Modifier = Modifier
+    onOpenPdfReader: (() -> Unit)? = null
 ) {
+    if (book == null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(DarkBackground),
+            contentAlignment = Alignment.Center
+        ) {
+            Text("No hay libro seleccionado", color = TextSecondary)
+        }
+        return
+    }
+
+    var showChaptersDialog by remember { mutableStateOf(false) }
     var showSpeedDialog by remember { mutableStateOf(false) }
-    var showVoiceDialog by remember { mutableStateOf(false) }
-    var showSleepTimerDialog by remember { mutableStateOf(false) }
-    var showReaderSettings by remember { mutableStateOf(false) }
+    var showVoicesDialog by remember { mutableStateOf(false) }
+    var showTimerDialog by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
 
-    // Auto-scroll to the currently spoken paragraph
+    // Auto-scroll transcript to active paragraph
     LaunchedEffect(currentParagraphIndex) {
         if (paragraphs.isNotEmpty() && currentParagraphIndex in paragraphs.indices) {
-            val targetScroll = (currentParagraphIndex - 1).coerceAtLeast(0)
-            listState.animateScrollToItem(targetScroll)
+            listState.animateScrollToItem((currentParagraphIndex - 1).coerceAtLeast(0))
         }
     }
 
-    // Dynamic reader background colors
-    val (readerBg, readerTextColor) = when (readerTheme) {
-        ReaderThemeMode.OLED_DARK -> Color(0xFF000000) to Color(0xFFF1F5F9)
-        ReaderThemeMode.MIDNIGHT_BLUE -> Color(0xFF0A1120) to Color(0xFFE2E8F0)
-        ReaderThemeMode.SEPIA -> Color(0xFF231F1C) to Color(0xFFEADCC9)
-        ReaderThemeMode.SLATE -> Color(0xFF131823) to Color(0xFFE2E8F0)
-    }
-
-    val activeParagraph = paragraphs.getOrNull(currentParagraphIndex)
+    val currentPara = paragraphs.getOrNull(currentParagraphIndex)
+    val currentChapter = currentPara?.chapterTitle ?: "Página ${book.currentPage}"
+    val totalParas = paragraphs.size.coerceAtLeast(1)
+    val progress = (currentParagraphIndex.toFloat() / totalParas.toFloat()).coerceIn(0f, 1f)
 
     Box(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxSize()
-            .background(readerBg)
-            .testTag("player_screen")
+            .background(DarkBackground)
     ) {
         Column(modifier = Modifier.fillMaxSize()) {
-            // Top App Bar
+            // Top Bar
             TopAppBar(
                 title = {
                     Column {
                         Text(
-                            text = book?.title ?: "Reproductor",
+                            text = book.title,
                             color = TextPrimary,
-                            style = MaterialTheme.typography.titleMedium,
+                            fontSize = 15.sp,
                             fontWeight = FontWeight.Bold,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = book?.author ?: "",
+                            text = book.author,
                             color = TextSecondary,
-                            style = MaterialTheme.typography.bodySmall,
+                            fontSize = 12.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onBackClick, modifier = Modifier.testTag("player_back_button")) {
+                    IconButton(
+                        onClick = onBackClick,
+                        modifier = Modifier.testTag("player_back_button")
+                    ) {
                         Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
+                            imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Volver",
                             tint = TextPrimary
                         )
                     }
                 },
                 actions = {
-                    // Sleep timer badge
-                    IconButton(
-                        onClick = { showSleepTimerDialog = true },
-                        modifier = Modifier.testTag("sleep_timer_button")
-                    ) {
-                        Box {
+                    // Open in PDF Reader
+                    if (onOpenPdfReader != null) {
+                        IconButton(onClick = onOpenPdfReader) {
                             Icon(
-                                imageVector = Icons.Default.Bedtime,
-                                contentDescription = "Temporizador",
-                                tint = if (sleepTimerMinutesLeft != null) ElectricCyan else TextSecondary
+                                imageVector = Icons.AutoMirrored.Filled.MenuBook,
+                                contentDescription = "Ver documento PDF",
+                                tint = ElectricCyan
                             )
-                            if (sleepTimerMinutesLeft != null) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(ElectricCyan)
-                                        .align(Alignment.TopEnd)
-                                )
-                            }
                         }
                     }
 
-                    // Reader font/theme settings toggle
-                    IconButton(
-                        onClick = { showReaderSettings = !showReaderSettings },
-                        modifier = Modifier.testTag("reader_settings_toggle")
-                    ) {
+                    // OCR Review
+                    IconButton(onClick = onReviewClick) {
                         Icon(
-                            imageVector = Icons.Default.FormatSize,
-                            contentDescription = "Ajustes de texto",
-                            tint = if (showReaderSettings) ElectricCyan else TextSecondary
+                            imageVector = Icons.Default.DocumentScanner,
+                            contentDescription = "Revisar texto OCR",
+                            tint = TextSecondary
                         )
                     }
 
-                    // Review text button
-                    IconButton(
-                        onClick = onReviewClick,
-                        modifier = Modifier.testTag("player_review_button")
-                    ) {
+                    // Favorite
+                    IconButton(onClick = { onToggleFavorite(book) }) {
                         Icon(
-                            imageVector = Icons.Default.TextFields,
-                            contentDescription = "Revisar texto",
-                            tint = ElectricCyan
+                            imageVector = if (book.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                            contentDescription = "Favorito",
+                            tint = if (book.isFavorite) Color(0xFFEF4444) else TextSecondary
                         )
-                    }
-
-                    // Favorite toggle
-                    book?.let {
-                        IconButton(onClick = { onToggleFavorite(it) }) {
-                            Icon(
-                                imageVector = if (it.isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
-                                contentDescription = "Favorito",
-                                tint = if (it.isFavorite) FavoriteRed else TextSecondary
-                            )
-                        }
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = readerBg)
+                colors = TopAppBarDefaults.topAppBarColors(containerColor = DarkSurface)
             )
 
-            // Collapsible Reader Settings Panel (Font Size & Theme Mode)
-            AnimatedVisibility(visible = showReaderSettings) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = DarkSurfaceVariant)
-                ) {
-                    Column(modifier = Modifier.padding(14.dp)) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Text(
-                                text = "Tamaño de letra: ${fontSize.toInt()}sp",
-                                color = TextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(DarkSurface)
-                                        .clickable { onFontSizeChange(fontSize - 2f) }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text("A-", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                }
-                                Box(
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(8.dp))
-                                        .background(DarkSurface)
-                                        .clickable { onFontSizeChange(fontSize + 2f) }
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text("A+", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 12.sp)
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(10.dp))
-
-                        // Theme buttons
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            ThemeChip(
-                                label = "OLED",
-                                color = Color(0xFF000000),
-                                isSelected = readerTheme == ReaderThemeMode.OLED_DARK,
-                                onClick = { onReaderThemeChange(ReaderThemeMode.OLED_DARK) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            ThemeChip(
-                                label = "Medianoche",
-                                color = Color(0xFF0A1120),
-                                isSelected = readerTheme == ReaderThemeMode.MIDNIGHT_BLUE,
-                                onClick = { onReaderThemeChange(ReaderThemeMode.MIDNIGHT_BLUE) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            ThemeChip(
-                                label = "Sepia",
-                                color = Color(0xFF231F1C),
-                                isSelected = readerTheme == ReaderThemeMode.SEPIA,
-                                onClick = { onReaderThemeChange(ReaderThemeMode.SEPIA) },
-                                modifier = Modifier.weight(1f)
-                            )
-                            ThemeChip(
-                                label = "Pizarra",
-                                color = Color(0xFF131823),
-                                isSelected = readerTheme == ReaderThemeMode.SLATE,
-                                onClick = { onReaderThemeChange(ReaderThemeMode.SLATE) },
-                                modifier = Modifier.weight(1f)
-                            )
-                        }
-                    }
-                }
-            }
-
-            // Book Text Reading Area with Paragraph Highlighting
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-            ) {
-                if (paragraphs.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text(
-                            text = "Cargando contenido del libro...",
-                            color = TextSecondary,
-                            fontSize = 14.sp
-                        )
-                    }
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(horizontal = 16.dp),
-                        contentPadding = PaddingValues(top = 12.dp, bottom = 24.dp),
-                        verticalArrangement = Arrangement.spacedBy(14.dp)
-                    ) {
-                        itemsIndexed(paragraphs, key = { idx, _ -> idx }) { index, para ->
-                            val isHighlighted = index == currentParagraphIndex
-
-                            // Detect chapter heading change
-                            val isFirstOfChapter = index == 0 || paragraphs[index - 1].chapterTitle != para.chapterTitle
-                            if (isFirstOfChapter) {
-                                ChapterHeaderBadge(title = para.chapterTitle, page = para.pageNumber)
-                                Spacer(modifier = Modifier.height(6.dp))
-                            }
-
-                            // Paragraph Item
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clip(RoundedCornerShape(12.dp))
-                                    .background(if (isHighlighted) ReadingHighlight else Color.Transparent)
-                                    .then(
-                                        if (isHighlighted) {
-                                            Modifier.border(1.5.dp, ReadingHighlightBorder, RoundedCornerShape(12.dp))
-                                        } else {
-                                            Modifier
-                                        }
-                                    )
-                                    .clickable { onParagraphClick(index) }
-                                    .padding(horizontal = 14.dp, vertical = 10.dp)
-                                    .testTag("paragraph_$index")
-                            ) {
-                                Row(verticalAlignment = Alignment.Top) {
-                                    if (isHighlighted && isPlaying) {
-                                        Box(
-                                            modifier = Modifier
-                                                .padding(top = 4.dp, end = 8.dp)
-                                                .size(6.dp)
-                                                .clip(CircleShape)
-                                                .background(ElectricCyan)
-                                        )
-                                    }
-                                    Text(
-                                        text = para.text,
-                                        color = if (isHighlighted) ElectricCyan else readerTextColor,
-                                        fontSize = fontSize.sp,
-                                        lineHeight = (fontSize * 1.55f).sp,
-                                        fontWeight = if (isHighlighted) FontWeight.SemiBold else FontWeight.Normal
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Bottom Audio Player Controls Sheet (Spotify/Audible Style)
+            // Top Area: Portada Destacada y Controles Modernos
             Surface(
+                color = DarkSurface,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .shadow(16.dp, RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)),
-                color = DarkSurface,
-                shape = RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)
+                    .border(androidx.compose.foundation.BorderStroke(0.5.dp, DarkBorderSubtle))
             ) {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 20.dp, vertical = 16.dp)
+                        .padding(horizontal = 20.dp, vertical = 14.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    // Chapter info and soundwave
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
+                    // Portada Destacada Minimalista
+                    Box(
+                        modifier = Modifier
+                            .size(100.dp)
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(DarkSurfaceVariant)
+                            .border(1.5.dp, ElectricCyan, RoundedCornerShape(16.dp)),
+                        contentAlignment = Alignment.Center
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = activeParagraph?.chapterTitle ?: "Lectura continua",
-                                color = TextPrimary,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 14.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Icon(
+                                imageVector = Icons.Default.Headphones,
+                                contentDescription = null,
+                                tint = ElectricCyan,
+                                modifier = Modifier.size(36.dp)
                             )
+                            Spacer(modifier = Modifier.height(4.dp))
                             Text(
-                                text = "Párrafo ${currentParagraphIndex + 1} de ${paragraphs.size.coerceAtLeast(1)} • Pág ${activeParagraph?.pageNumber ?: 1}",
+                                text = "Pág. ${currentPara?.pageNumber ?: book.currentPage}",
                                 color = TextSecondary,
-                                fontSize = 12.sp
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.SemiBold
                             )
                         }
-
-                        WaveVisualizer(
-                            isPlaying = isPlaying,
-                            barCount = 12,
-                            maxHeight = 20.dp,
-                            barWidth = 2.5.dp
-                        )
                     }
 
                     Spacer(modifier = Modifier.height(10.dp))
 
-                    // Progress Slider
-                    val progressFraction = if (paragraphs.isNotEmpty()) {
-                        (currentParagraphIndex.toFloat() / (paragraphs.size - 1).coerceAtLeast(1).toFloat()).coerceIn(0f, 1f)
-                    } else 0f
+                    // Capítulo actual
+                    Text(
+                        text = currentChapter,
+                        color = ElectricCyan,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
 
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    // Barra de progreso interactiva
                     Slider(
-                        value = progressFraction,
-                        onValueChange = { frac ->
-                            if (paragraphs.isNotEmpty()) {
-                                val targetIdx = (frac * (paragraphs.size - 1)).toInt()
-                                onParagraphClick(targetIdx)
-                            }
+                        value = progress,
+                        onValueChange = { newProg ->
+                            val targetIdx = (newProg * totalParas).roundToInt().coerceIn(0, totalParas - 1)
+                            onParagraphClick(targetIdx)
                         },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(28.dp)
+                            .testTag("player_progress_slider"),
                         colors = SliderDefaults.colors(
                             thumbColor = ElectricCyan,
                             activeTrackColor = ElectricCyan,
-                            inactiveTrackColor = DarkSurfaceVariant
-                        ),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(24.dp)
-                            .testTag("progress_slider")
+                            inactiveTrackColor = ElectricCyanTrack
+                        )
                     )
 
-                    // Percentage & Time labels
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = "${(progressFraction * 100).toInt()}%",
+                            text = "Párrafo ${currentParagraphIndex + 1} de $totalParas",
+                            color = TextSecondary,
+                            fontSize = 11.sp
+                        )
+                        Text(
+                            text = "${(progress * 100).roundToInt()}%",
                             color = ElectricCyan,
                             fontSize = 11.sp,
                             fontWeight = FontWeight.Bold
                         )
-                        Text(
-                            text = "${paragraphs.size - (currentParagraphIndex + 1)} párrafos restantes",
-                            color = TextSecondary,
-                            fontSize = 11.sp
-                        )
                     }
 
-                    Spacer(modifier = Modifier.height(12.dp))
+                    Spacer(modifier = Modifier.height(10.dp))
 
-                    // Media Control Buttons Row
+                    // Botones modernos de reproducción: Pause/Play, Avanzar, Retroceder, Capítulos
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.SpaceEvenly,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
-                        // Previous chapter
-                        IconButton(
-                            onClick = onPreviousChapter,
-                            modifier = Modifier.testTag("prev_chapter_button")
-                        ) {
-                            Icon(
-                                Icons.Default.SkipPrevious,
-                                contentDescription = "Capítulo anterior",
-                                tint = TextSecondary,
-                                modifier = Modifier.size(28.dp)
-                            )
-                        }
-
-                        // Rewind 15 seconds
+                        // Skip Backward 15s
                         IconButton(
                             onClick = onSkipBackward15,
-                            modifier = Modifier.testTag("rewind_15_button")
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(DarkSurfaceVariant)
+                                .testTag("player_skip_back_15")
                         ) {
                             Icon(
-                                Icons.Default.Replay10,
-                                contentDescription = "Retroceder",
+                                imageVector = Icons.Default.FastRewind,
+                                contentDescription = "Retroceder 15s",
                                 tint = TextPrimary,
-                                modifier = Modifier.size(30.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
 
-                        // Big Play / Pause button
-                        Box(
+                        // Previous Paragraph
+                        IconButton(
+                            onClick = onPreviousParagraph,
                             modifier = Modifier
-                                .size(64.dp)
+                                .size(42.dp)
                                 .clip(CircleShape)
-                                .background(
-                                    Brush.linearGradient(
-                                        listOf(ElectricCyan, ElectricPurple)
-                                    )
-                                )
-                                .clickable { onTogglePlay() }
-                                .testTag("player_play_pause_button"),
-                            contentAlignment = Alignment.Center
+                                .background(DarkSurfaceVariant)
+                                .testTag("player_prev_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipPrevious,
+                                contentDescription = "Párrafo anterior",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        // Main Play / Pause Button in Luminous Cyan
+                        IconButton(
+                            onClick = onTogglePlay,
+                            modifier = Modifier
+                                .size(60.dp)
+                                .clip(CircleShape)
+                                .background(ElectricCyan)
+                                .testTag("player_play_pause_button")
                         ) {
                             Icon(
                                 imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                                contentDescription = if (isPlaying) "Pausar" else "Reproducir",
+                                contentDescription = if (isPlaying) "Pausa" else "Reproducir",
                                 tint = Color.Black,
-                                modifier = Modifier.size(36.dp)
+                                modifier = Modifier.size(32.dp)
                             )
                         }
 
-                        // Forward 15 seconds
+                        // Next Paragraph
+                        IconButton(
+                            onClick = onNextParagraph,
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(DarkSurfaceVariant)
+                                .testTag("player_next_button")
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.SkipNext,
+                                contentDescription = "Párrafo siguiente",
+                                tint = TextPrimary,
+                                modifier = Modifier.size(22.dp)
+                            )
+                        }
+
+                        // Skip Forward 15s
                         IconButton(
                             onClick = onSkipForward15,
-                            modifier = Modifier.testTag("forward_15_button")
+                            modifier = Modifier
+                                .size(42.dp)
+                                .clip(CircleShape)
+                                .background(DarkSurfaceVariant)
+                                .testTag("player_skip_fwd_15")
                         ) {
                             Icon(
-                                Icons.Default.Forward10,
-                                contentDescription = "Avanzar",
+                                imageVector = Icons.Default.FastForward,
+                                contentDescription = "Avanzar 15s",
                                 tint = TextPrimary,
-                                modifier = Modifier.size(30.dp)
-                            )
-                        }
-
-                        // Next chapter
-                        IconButton(
-                            onClick = onNextChapter,
-                            modifier = Modifier.testTag("next_chapter_button")
-                        ) {
-                            Icon(
-                                Icons.Default.SkipNext,
-                                contentDescription = "Siguiente capítulo",
-                                tint = TextSecondary,
-                                modifier = Modifier.size(28.dp)
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
 
-                    Spacer(modifier = Modifier.height(14.dp))
+                    Spacer(modifier = Modifier.height(12.dp))
 
-                    // Secondary Tools: Speed, Voice, Sleep Timer
+                    // Acceso a Capítulos, Velocidad, Voces y Temporizador
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceAround,
-                        verticalAlignment = Alignment.CenterVertically
+                        horizontalArrangement = Arrangement.SpaceAround
                     ) {
-                        // Speed button
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(DarkSurfaceVariant)
-                                .clickable { showSpeedDialog = true }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                                .testTag("speed_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.Speed, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text("${speechRate}x", color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
+                        // Capítulos
+                        ActionPill(
+                            icon = Icons.Default.List,
+                            label = "Capítulos",
+                            onClick = { showChaptersDialog = true }
+                        )
 
-                        // Voice Selector Button
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(DarkSurfaceVariant)
-                                .clickable { showVoiceDialog = true }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                                .testTag("voice_button"),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(Icons.Default.RecordVoiceOver, contentDescription = null, tint = ElectricPurple, modifier = Modifier.size(16.dp))
-                                Spacer(modifier = Modifier.width(6.dp))
-                                val shortVoiceName = selectedVoice?.displayName?.take(10) ?: "Voz"
-                                Text(shortVoiceName, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                            }
-                        }
+                        // Velocidad
+                        ActionPill(
+                            icon = Icons.Default.Speed,
+                            label = "${speechRate}x",
+                            onClick = { showSpeedDialog = true }
+                        )
 
-                        // Sleep Timer Button
-                        Box(
+                        // Voces
+                        ActionPill(
+                            icon = Icons.Default.RecordVoiceOver,
+                            label = "Voz",
+                            onClick = { showVoicesDialog = true }
+                        )
+
+                        // Temporizador
+                        ActionPill(
+                            icon = Icons.Default.Timer,
+                            label = if (sleepTimerMinutesLeft != null) "${sleepTimerMinutesLeft}m" else "Timer",
+                            isActive = sleepTimerMinutesLeft != null,
+                            onClick = { showTimerDialog = true }
+                        )
+                    }
+                }
+            }
+
+            // Transcripción sincronizada debajo del reproductor
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 8.dp)
+            ) {
+                LazyColumn(
+                    state = listState,
+                    modifier = Modifier.fillMaxSize()
+                ) {
+                    itemsIndexed(paragraphs, key = { idx, _ -> idx }) { idx, para ->
+                        val isCurrent = idx == currentParagraphIndex
+                        Surface(
+                            shape = RoundedCornerShape(10.dp),
+                            color = if (isCurrent) DarkSurfaceVariant else DarkSurface,
+                            border = androidx.compose.foundation.BorderStroke(
+                                width = if (isCurrent) 1.5.dp else 0.5.dp,
+                                color = if (isCurrent) ElectricCyan else DarkBorderSubtle
+                            ),
                             modifier = Modifier
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (sleepTimerMinutesLeft != null) ElectricCyan.copy(alpha = 0.2f) else DarkSurfaceVariant)
-                                .clickable { showSleepTimerDialog = true }
-                                .padding(horizontal = 14.dp, vertical = 8.dp)
-                                .testTag("timer_chip_button"),
-                            contentAlignment = Alignment.Center
+                                .fillMaxWidth()
+                                .padding(vertical = 4.dp)
+                                .clickable { onParagraphClick(idx) }
                         ) {
-                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                Icon(
-                                    Icons.Default.Bedtime,
-                                    contentDescription = null,
-                                    tint = if (sleepTimerMinutesLeft != null) ElectricCyan else TextSecondary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Text(
-                                    if (sleepTimerMinutesLeft != null) "${sleepTimerMinutesLeft}m" else "Timer",
-                                    color = if (sleepTimerMinutesLeft != null) ElectricCyan else TextPrimary,
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
+                            Row(
+                                modifier = Modifier.padding(14.dp),
+                                verticalAlignment = Alignment.Top
+                            ) {
+                                if (isCurrent) {
+                                    Icon(
+                                        imageVector = Icons.AutoMirrored.Filled.VolumeUp,
+                                        contentDescription = null,
+                                        tint = ElectricCyan,
+                                        modifier = Modifier
+                                            .size(18.dp)
+                                            .padding(top = 2.dp)
+                                    )
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                }
+
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = "${para.chapterTitle} • Pág. ${para.pageNumber}",
+                                            color = if (isCurrent) ElectricCyan else TextTertiary,
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold
+                                        )
+                                        if (para.isUserEdited) {
+                                            Text("Editado", color = ElectricCyan, fontSize = 9.sp)
+                                        }
+                                    }
+                                    Spacer(modifier = Modifier.height(4.dp))
+                                    Text(
+                                        text = para.text,
+                                        color = if (isCurrent) TextPrimary else TextSecondary,
+                                        fontSize = fontSize.sp,
+                                        lineHeight = (fontSize * 1.45).sp,
+                                        fontWeight = if (isCurrent) FontWeight.Medium else FontWeight.Normal
+                                    )
+                                }
                             }
                         }
                     }
@@ -646,101 +515,230 @@ fun PlayerScreen(
             }
         }
 
-        // Dialogs
+        // Diálogo de Capítulos
+        if (showChaptersDialog) {
+            val chapters = remember(paragraphs) {
+                paragraphs.groupBy { it.chapterTitle }.map { (title, list) ->
+                    Pair(title, list.first().paragraphIndex)
+                }
+            }
+            AlertDialog(
+                onDismissRequest = { showChaptersDialog = false },
+                containerColor = DarkSurface,
+                title = { Text("Capítulos y Secciones", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = {
+                    LazyColumn(modifier = Modifier.fillMaxWidth()) {
+                        items(chapters.size) { i ->
+                            val (chTitle, chIdx) = chapters[i]
+                            val isSelected = currentPara?.chapterTitle == chTitle
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        onParagraphClick(chIdx)
+                                        showChaptersDialog = false
+                                    }
+                                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Text(
+                                    text = chTitle,
+                                    color = if (isSelected) ElectricCyan else TextPrimary,
+                                    fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                                    fontSize = 14.sp,
+                                    modifier = Modifier.weight(1f)
+                                )
+                                if (isSelected) {
+                                    Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ElectricCyan, modifier = Modifier.size(18.dp))
+                                }
+                            }
+                            HorizontalDivider(color = DarkBorderSubtle, thickness = 0.5.dp)
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showChaptersDialog = false }) {
+                        Text("Cerrar", color = ElectricCyan, fontWeight = FontWeight.Bold)
+                    }
+                }
+            )
+        }
+
+        // Diálogo de Velocidad
         if (showSpeedDialog) {
-            SpeedSelectorDialog(
-                currentSpeed = speechRate,
-                onSelectSpeed = onSelectSpeed,
-                onDismiss = { showSpeedDialog = false }
+            AlertDialog(
+                onDismissRequest = { showSpeedDialog = false },
+                containerColor = DarkSurface,
+                title = { Text("Velocidad de reproducción", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f).forEach { spd ->
+                            val isSel = (speechRate - spd).let { kotlin.math.abs(it) < 0.05f }
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(if (isSel) ElectricCyan else DarkSurfaceVariant)
+                                    .clickable {
+                                        onSelectSpeed(spd)
+                                        showSpeedDialog = false
+                                    }
+                                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                            ) {
+                                Text(
+                                    text = "${spd}x",
+                                    color = if (isSel) Color.Black else TextPrimary,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showSpeedDialog = false }) {
+                        Text("Aceptar", color = ElectricCyan)
+                    }
+                }
             )
         }
 
-        if (showVoiceDialog) {
-            VoiceSelectorDialog(
-                voices = availableVoices,
-                selectedVoice = selectedVoice,
-                onSelectVoice = onSelectVoice,
-                onSamplePlay = onSamplePlay,
-                onDismiss = { showVoiceDialog = false }
+        // Diálogo de Voces
+        if (showVoicesDialog) {
+            AlertDialog(
+                onDismissRequest = { showVoicesDialog = false },
+                containerColor = DarkSurface,
+                title = { Text("Voces TTS del Sistema", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = {
+                    if (availableVoices.isEmpty()) {
+                        Text("Cargando voces instaladas...", color = TextSecondary)
+                    } else {
+                        LazyColumn(modifier = Modifier.fillMaxWidth().height(260.dp)) {
+                            items(availableVoices.size) { i ->
+                                val v = availableVoices[i]
+                                val isSel = v.name == selectedVoice?.name
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            onSelectVoice(v)
+                                            showVoicesDialog = false
+                                        }
+                                        .padding(vertical = 10.dp, horizontal = 6.dp),
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Text(
+                                            text = v.locale.displayName,
+                                            color = if (isSel) ElectricCyan else TextPrimary,
+                                            fontSize = 13.sp,
+                                            fontWeight = if (isSel) FontWeight.Bold else FontWeight.Normal
+                                        )
+                                        Text(text = v.name.takeLast(24), color = TextTertiary, fontSize = 10.sp)
+                                    }
+                                    IconButton(onClick = { onSamplePlay(v) }, modifier = Modifier.size(32.dp)) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = "Probar", tint = ElectricCyan, modifier = Modifier.size(16.dp))
+                                    }
+                                }
+                                HorizontalDivider(color = DarkBorderSubtle, thickness = 0.5.dp)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showVoicesDialog = false }) {
+                        Text("Cerrar", color = ElectricCyan)
+                    }
+                }
             )
         }
 
-        if (showSleepTimerDialog) {
-            SleepTimerDialog(
-                currentMinutesLeft = sleepTimerMinutesLeft,
-                onSelectMinutes = onStartSleepTimer,
-                onCancelTimer = onCancelSleepTimer,
-                onDismiss = { showSleepTimerDialog = false }
+        // Diálogo de Temporizador
+        if (showTimerDialog) {
+            AlertDialog(
+                onDismissRequest = { showTimerDialog = false },
+                containerColor = DarkSurface,
+                title = { Text("Temporizador de apagado", color = TextPrimary, fontWeight = FontWeight.Bold) },
+                text = {
+                    Column {
+                        Text(
+                            text = if (sleepTimerMinutesLeft != null) "Tiempo restante: $sleepTimerMinutesLeft minutos" else "Detiene la lectura automáticamente:",
+                            color = TextSecondary,
+                            fontSize = 13.sp
+                        )
+                        Spacer(modifier = Modifier.height(14.dp))
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                            listOf(15, 30, 45, 60).forEach { mins ->
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(8.dp))
+                                        .background(DarkSurfaceVariant)
+                                        .clickable {
+                                            onStartSleepTimer(mins)
+                                            showTimerDialog = false
+                                        }
+                                        .padding(horizontal = 12.dp, vertical = 10.dp)
+                                ) {
+                                    Text("${mins}m", color = ElectricCyan, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                }
+                            }
+                        }
+
+                        if (sleepTimerMinutesLeft != null) {
+                            Spacer(modifier = Modifier.height(14.dp))
+                            Button(
+                                onClick = {
+                                    onCancelSleepTimer()
+                                    showTimerDialog = false
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFEF4444)),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Cancelar temporizador activo", color = Color.White, fontWeight = FontWeight.Bold)
+                            }
+                        }
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = { showTimerDialog = false }) {
+                        Text("Cerrar", color = ElectricCyan)
+                    }
+                }
             )
         }
     }
 }
 
 @Composable
-private fun ChapterHeaderBadge(title: String, page: Int) {
+private fun ActionPill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    label: String,
+    isActive: Boolean = false,
+    onClick: () -> Unit
+) {
     Row(
         modifier = Modifier
-            .fillMaxWidth()
-            .padding(vertical = 8.dp),
+            .clip(RoundedCornerShape(20.dp))
+            .background(if (isActive) ElectricCyanSubtle else DarkSurfaceVariant)
+            .border(1.dp, if (isActive) ElectricCyan else DarkBorderSubtle, RoundedCornerShape(20.dp))
+            .clickable { onClick() }
+            .padding(horizontal = 12.dp, vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(8.dp))
-                .background(ElectricPurple.copy(alpha = 0.2f))
-                .padding(horizontal = 10.dp, vertical = 5.dp)
-        ) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    imageVector = Icons.Default.Bookmark,
-                    contentDescription = null,
-                    tint = ElectricPurple,
-                    modifier = Modifier.size(14.dp)
-                )
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = title,
-                    color = ElectricPurple,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 12.sp
-                )
-            }
-        }
-        Spacer(modifier = Modifier.width(10.dp))
-        Text(
-            text = "Página $page",
-            color = TextSecondary,
-            fontSize = 11.sp
+        Icon(
+            imageVector = icon,
+            contentDescription = label,
+            tint = if (isActive) ElectricCyan else TextSecondary,
+            modifier = Modifier.size(15.dp)
         )
-    }
-}
-
-@Composable
-private fun ThemeChip(
-    label: String,
-    color: Color,
-    isSelected: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier
-) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(10.dp))
-            .background(color)
-            .border(
-                width = if (isSelected) 2.dp else 1.dp,
-                color = if (isSelected) ElectricCyan else Color(0xFF334155),
-                shape = RoundedCornerShape(10.dp)
-            )
-            .clickable { onClick() }
-            .padding(vertical = 6.dp),
-        contentAlignment = Alignment.Center
-    ) {
+        Spacer(modifier = Modifier.width(5.dp))
         Text(
             text = label,
-            color = if (isSelected) ElectricCyan else TextPrimary,
+            color = if (isActive) ElectricCyan else TextPrimary,
             fontSize = 11.sp,
-            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal
+            fontWeight = FontWeight.SemiBold
         )
     }
 }

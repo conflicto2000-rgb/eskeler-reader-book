@@ -6,13 +6,10 @@ import android.graphics.Color
 import android.graphics.ColorMatrix
 import android.graphics.ColorMatrixColorFilter
 import android.graphics.Paint
+import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-/**
- * Modes of image pre-processing specialized for difficult typographies,
- * historical prints, aged yellowed paper, faded ink, and high-serif text.
- */
 enum class PreprocessingMode(val id: String, val displayName: String, val description: String) {
     STANDARD("standard", "Estándar", "Escala de grises y contraste balanceado para libros contemporáneos"),
     VINTAGE_BOOK("vintage", "Libro Antiguo / Papel Amarillo", "Elimina fondo amarillento, realza tinta tenue y compensa iluminación desigual"),
@@ -25,20 +22,8 @@ data class SkewCorrectionResult(
     val angleDegrees: Float
 )
 
-/**
- * Image preprocessor designed for difficult book scans:
- * - Aged / yellowed pages with uneven illumination
- * - Faded / irregular ink, broken strokes
- * - Heavy serif, Gothic / Fraktur fonts
- * - Margin cropping of dark scanner borders
- * - Skew / tilt detection and rotation
- */
 object ImagePreprocessor {
 
-    /**
-     * Preprocesses a rendered page bitmap using the designated strategy.
-     * Always returns a newly allocated Bitmap; the caller is responsible for recycling.
-     */
     fun preprocess(source: Bitmap, mode: PreprocessingMode): Bitmap {
         return when (mode) {
             PreprocessingMode.STANDARD -> applyStandardEnhancement(source)
@@ -48,9 +33,6 @@ object ImagePreprocessor {
         }
     }
 
-    /**
-     * Standard enhancement: mild grayscale conversion with moderate contrast boost.
-     */
     private fun applyStandardEnhancement(src: Bitmap): Bitmap {
         val dest = Bitmap.createBitmap(src.width, src.height, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(dest)
@@ -74,12 +56,6 @@ object ImagePreprocessor {
         return dest
     }
 
-    /**
-     * Vintage Book / Aged Paper Correction:
-     * - Whitens yellowish/brownish background paper tone.
-     * - Elevates the blue channel weight (yellow is high R+G, low B; boosting B response flattens yellow background).
-     * - Darkens faded ink without eroding thin historical character serifs.
-     */
     fun applyVintageBookCorrection(src: Bitmap): Bitmap {
         val width = src.width
         val height = src.height
@@ -88,7 +64,6 @@ object ImagePreprocessor {
         val pixels = IntArray(width * height)
         src.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        // Sample background luminance estimation (sampling corners and edges)
         var bgSum = 0L
         var bgSamples = 0
         val sampleStep = max(1, min(width, height) / 30)
@@ -105,25 +80,18 @@ object ImagePreprocessor {
         }
         val estimatedBg = if (bgSamples > 0) (bgSum / bgSamples).toInt().coerceIn(160, 245) else 215
 
-        // Process pixels: Stretch paper tone to clean white (255) and clamp dark ink
         for (i in pixels.indices) {
             val p = pixels[i]
             val r = (p shr 16) and 0xFF
             val g = (p shr 8) and 0xFF
             val b = p and 0xFF
 
-            // Perceptual gray favoring ink contrast over yellow paper
-            // Paper yellow has low blue, so weighting blue reduces yellow dominance
             val gray = (0.2126 * r + 0.7152 * g + 0.0722 * b).toInt()
 
-            // Non-linear gamma stretch:
-            // If near background level, brighten to white
-            // If significantly darker, preserve ink density
             val normalized = (gray.toFloat() / estimatedBg.toFloat()).coerceIn(0f, 1.25f)
             val enhanced = if (normalized > 0.85f) {
                 255
             } else {
-                // S-curve contrast boost on ink strokes
                 val ink = (normalized / 0.85f)
                 (ink * ink * 240).toInt().coerceIn(0, 255)
             }
@@ -135,11 +103,6 @@ object ImagePreprocessor {
         return dest
     }
 
-    /**
-     * Adaptive Binarization (Otsu-inspired local thresholding):
-     * Ideal for Gothic / Fraktur fonts and heavy serif typography where sharp character
-     * boundaries dramatically improve OCR token classification.
-     */
     fun applyAdaptiveBinarization(src: Bitmap): Bitmap {
         val width = src.width
         val height = src.height
@@ -148,7 +111,6 @@ object ImagePreprocessor {
         val pixels = IntArray(width * height)
         src.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        // Compute local grid thresholds (8x8 window grid to accommodate uneven scanner lighting)
         val gridCols = 8
         val gridRows = 8
         val colWidth = width / gridCols
@@ -175,7 +137,6 @@ object ImagePreprocessor {
                     }
                 }
                 val avg = if (count > 0) (sum / count).toInt() else 128
-                // Set threshold slightly below average to prevent stroke erosion
                 thresholds[gr][gc] = (avg * 0.82f).toInt().coerceIn(70, 200)
             }
         }
@@ -200,10 +161,6 @@ object ImagePreprocessor {
         return dest
     }
 
-    /**
-     * Fine Stroke / High-Frequency Detail Enhancement:
-     * Unsharp-masking style kernel that brings out small antique fonts, serifs, and italics.
-     */
     fun applyFineStrokeEnhancement(src: Bitmap): Bitmap {
         val width = src.width
         val height = src.height
@@ -213,7 +170,6 @@ object ImagePreprocessor {
         val outPixels = IntArray(width * height)
         src.getPixels(pixels, 0, width, 0, 0, width, height)
 
-        // Convert to grayscale first
         for (i in pixels.indices) {
             val p = pixels[i]
             val r = (p shr 16) and 0xFF
@@ -223,7 +179,6 @@ object ImagePreprocessor {
             pixels[i] = gray
         }
 
-        // 3x3 Sharpening filter: [0, -1, 0; -1, 5, -1; 0, -1, 0]
         for (y in 1 until height - 1) {
             val rowOffset = y * width
             for (x in 1 until width - 1) {
@@ -233,15 +188,12 @@ object ImagePreprocessor {
                 val left = pixels[rowOffset + x - 1]
                 val right = pixels[rowOffset + x + 1]
 
-                // Sharpen response
                 val sharpened = 5 * center - top - bottom - left - right
-                // Soft contrast clamp
                 val clamped = sharpened.coerceIn(0, 255)
                 outPixels[rowOffset + x] = (0xFF shl 24) or (clamped shl 16) or (clamped shl 8) or clamped
             }
         }
 
-        // Fill borders
         for (x in 0 until width) {
             val pTop = pixels[x].coerceIn(0, 255)
             val pBottom = pixels[(height - 1) * width + x].coerceIn(0, 255)
@@ -259,10 +211,6 @@ object ImagePreprocessor {
         return dest
     }
 
-    /**
-     * Trims black scanning borders / scanner frame shadows that often fool OCR into
-     * producing lines of garbage symbols ("||||", "=====", ".....").
-     */
     fun trimScannerBorders(src: Bitmap): Bitmap {
         val width = src.width
         val height = src.height
@@ -279,7 +227,6 @@ object ImagePreprocessor {
         val maxCropY = (height * 0.08f).toInt()
         val maxCropX = (width * 0.08f).toInt()
 
-        // Check top black edge
         for (y in 0 until maxCropY) {
             var darkCount = 0
             for (x in 0 until width step 8) {
@@ -292,7 +239,6 @@ object ImagePreprocessor {
             } else break
         }
 
-        // Check bottom black edge
         for (y in height - 1 downTo height - maxCropY) {
             var darkCount = 0
             for (x in 0 until width step 8) {
@@ -305,7 +251,6 @@ object ImagePreprocessor {
             } else break
         }
 
-        // Check left black edge
         for (x in 0 until maxCropX) {
             var darkCount = 0
             for (y in 0 until height step 8) {
@@ -318,7 +263,6 @@ object ImagePreprocessor {
             } else break
         }
 
-        // Check right black edge
         for (x in width - 1 downTo width - maxCropX) {
             var darkCount = 0
             for (y in 0 until height step 8) {
@@ -341,10 +285,6 @@ object ImagePreprocessor {
         }
     }
 
-    /**
-     * Rotates a bitmap by a specified angle in degrees (e.g., 90, 180, 270, or small skew angles).
-     * Returns a new Bitmap instance.
-     */
     fun rotateBitmap(src: Bitmap, degrees: Float): Bitmap {
         if (degrees == 0f) return src
         val matrix = android.graphics.Matrix().apply {
@@ -353,11 +293,8 @@ object ImagePreprocessor {
         return Bitmap.createBitmap(src, 0, 0, src.width, src.height, matrix, true)
     }
 
-    /**
-     * Deskews a bitmap if the measured angle exceeds threshold (|angle| > 0.8 degrees).
-     */
     fun deskew(src: Bitmap, angleDegrees: Float): Bitmap {
-        if (kotlin.math.abs(angleDegrees) < 0.8f || kotlin.math.abs(angleDegrees) > 45.0f) {
+        if (abs(angleDegrees) < 0.8f || abs(angleDegrees) > 45.0f) {
             return src
         }
         return rotateBitmap(src, -angleDegrees)

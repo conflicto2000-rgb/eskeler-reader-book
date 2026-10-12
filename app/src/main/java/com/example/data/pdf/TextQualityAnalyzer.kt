@@ -11,11 +11,9 @@ data class QualityReport(
 
 object TextQualityAnalyzer {
 
-    // Common vowels in Spanish, English, and Latin languages (accented included)
     private val VOWELS = setOf('a', 'e', 'i', 'o', 'u', 'á', 'é', 'í', 'ó', 'ú', 'ü', 'y',
                                'A', 'E', 'I', 'O', 'U', 'Á', 'É', 'Í', 'Ó', 'Ú', 'Ü', 'Y')
 
-    // Common Spanish / English abbreviations and symbols that are legitimate
     private val LEGITIMATE_SHORT_TOKENS = setOf(
         "pág", "pag", "vol", "cap", "art", "dr", "dra", "sr", "sra", "etc", "vs", "km", "kg", "cm", "mm",
         "no", "nº", "núm", "num", "ed", "op", "cit", "ibíd", "ibid", "fig", "ej", "apdo", "ee.uu", "eeuu"
@@ -52,7 +50,6 @@ object TextQualityAnalyzer {
             )
         }
 
-        // 1. Check for Unicode replacement character and non-printable control characters
         val replacementCharCount = trimmed.count { it == '\uFFFD' || it == '\u0000' || (it.code in 1..8) || (it.code in 14..31) }
         val replacementRatio = replacementCharCount.toFloat() / totalChars.toFloat()
         if (replacementRatio > 0.02f) {
@@ -60,7 +57,6 @@ object TextQualityAnalyzer {
             scoreDeduction += (replacementRatio * 10).coerceAtMost(0.5f)
         }
 
-        // Check for leaked PDF internal dictionary syntax tokens
         val pdfSyntaxTokens = listOf("/type", "/font", "/xobject", "/procset", "endobj", "endstream", "/mediabox", "/length", "/filter", "/flatedecode", "/cff", "/cidfont")
         val lowerText = trimmed.lowercase()
         val leakedTokenCount = pdfSyntaxTokens.count { lowerText.contains(it) }
@@ -69,7 +65,6 @@ object TextQualityAnalyzer {
             scoreDeduction += 0.60f
         }
 
-        // 2. Analyze words for legitimate pronounceability (vowel/consonant balance)
         var legitimateWords = 0
         var unpronounceableWords = 0
         var mixedAlphaNumWords = 0
@@ -79,29 +74,23 @@ object TextQualityAnalyzer {
             val cleanWord = word.trim { !it.isLetterOrDigit() }
             if (cleanWord.isEmpty()) continue
 
-            // Allow valid numbers, dates, Roman numerals, abbreviations
             if (isLegitimateNumericOrSymbolic(cleanWord)) {
                 legitimateWords++
                 continue
             }
 
-            // Detect mixed letters and digits (font encoding corruption, e.g. "c0rr1d0", "f0nt4")
             if (hasMixedLettersAndDigits(cleanWord)) {
                 mixedAlphaNumWords++
                 continue
             }
 
-            // Word length check (strings longer than 35 without hyphens are typically corrupt streams)
             if (cleanWord.length > 35) {
                 overlyLongWords++
                 continue
             }
 
-            // Pronounceability check (must have at least one vowel if word is > 1 char, except legitimate acronyms)
             val hasVowel = cleanWord.any { it in VOWELS }
             val onlyConsonants = cleanWord.length >= 3 && !hasVowel
-
-            // Consecutive consonant cluster (> 5 consecutive consonants is abnormal in Spanish/English prose)
             val hasExtremeConsonantCluster = hasTooManyConsecutiveConsonants(cleanWord)
 
             if (onlyConsonants || hasExtremeConsonantCluster) {
@@ -128,7 +117,6 @@ object TextQualityAnalyzer {
             scoreDeduction += 0.20f
         }
 
-        // 3. Check symbol vs letter ratio
         val letterCount = trimmed.count { it.isLetter() }
         val letterRatio = letterCount.toFloat() / totalChars.toFloat()
         if (letterRatio < 0.45f && totalChars > 40) {
@@ -136,7 +124,6 @@ object TextQualityAnalyzer {
             scoreDeduction += 0.30f
         }
 
-        // 4. Repeated consecutive token sequences (OCR duplicate loops or stream stutter)
         val hasStutter = hasRepeatedNgrams(words)
         if (hasStutter) {
             issues.add("Repetición anormal de frases o palabras")
@@ -160,9 +147,8 @@ object TextQualityAnalyzer {
         val lower = token.lowercase()
         if (lower in LEGITIMATE_SHORT_TOKENS) return true
 
-        // Pure numbers, currencies, percentages, dates, Roman numerals (e.g. 1998, $45.00, 25%, 12/05/2020, XIV)
         if (token.all { it.isDigit() || it in ".,/%$-+:°" }) return true
-        if (token.matches(Regex("^[IVXLCDMivxlcdm]+$"))) return true // Roman numerals
+        if (token.matches(Regex("^[IVXLCDMivxlcdm]+$"))) return true
         return false
     }
 
@@ -171,7 +157,6 @@ object TextQualityAnalyzer {
         val hasDigit = token.any { it.isDigit() }
         if (!hasLetter || !hasDigit) return false
 
-        // Exception for legitimate terms: e.g. 3D, 4K, CO2, H2O, MP3, COVID-19, 1ª, 2º
         val lower = token.lowercase()
         if (lower.matches(Regex("^[0-9]+[ªº]$"))) return false
         if (lower.matches(Regex("^(3d|4k|mp3|mp4|co2|h2o|covid-19|v[0-9]+)$"))) return false

@@ -2,25 +2,34 @@ package com.example.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Dark palette with electric blue & purple accents (Spotify/Audible dark vibe)
-val ElectricCyan = Color(0xFF00D4FF)
-val ElectricBlue = Color(0xFF38BDF8)
-val ElectricPurple = Color(0xFFA855F7)
-val VividPurple = Color(0xFF9333EA)
-val NeonIndigo = Color(0xFF6366F1)
+// Identidad Visual - Futurista Minimalista Premium
+// Fondo negro profundo
+val DarkBackground = Color(0xFF05090B)
 
-val DarkBackground = Color(0xFF0B0E14)
-val DarkSurface = Color(0xFF131823)
-val DarkSurfaceVariant = Color(0xFF1B2232)
-val DarkSurfaceContainer = Color(0xFF232B3E)
-val DarkSurfaceContainerHigh = Color(0xFF2E3850)
+// Tarjetas y superficies en azul petróleo oscuro
+val DarkSurface = Color(0xFF102126)
+val DarkSurfaceVariant = Color(0xFF152A30)
+val DarkSurfaceElevated = Color(0xFF1A333A)
 
-val TextPrimary = Color(0xFFF8FAFC)
-val TextSecondary = Color(0xFF94A3B8)
-val TextTertiary = Color(0xFF64748B)
+// Bordes sutiles y discretos
+val DarkBorder = Color(0xFF1D353D)
+val DarkBorderSubtle = Color(0xFF14272D)
 
-val ReadingHighlight = Color(0x3000D4FF)
-val ReadingHighlightBorder = Color(0xFF00D4FF)
-val SuccessGreen = Color(0xFF10B981)
-val FavoriteRed = Color(0xFFF43F5E)
-val AmberWarning = Color(0xFFF59E0B)
+// Cian luminoso únicamente para acciones principales, progreso e indicadores activos
+val ElectricCyan = Color(0xFF35E0E6)
+val ElectricCyanSubtle = Color(0x2635E0E6) // 15% para fondos de pills activos
+val ElectricCyanTrack = Color(0x2635E0E6)  // Track de barras de progreso
+
+// Tipografía moderna, limpia y legible
+val TextPrimary = Color(0xFFF2F7F8)
+val TextSecondary = Color(0xFF86A1A7)
+val TextTertiary = Color(0xFF536E74)
+
+// Estados auxiliares
+val AccentRed = Color(0xFFEF4444)
+val AccentAmber = Color(0xFFF59E0B)
+val AccentGreen = Color(0xFF10B981)
+
+val LowConfidenceWarningBg = Color(0xFF2E190D)
+val LowConfidenceWarningBorder = Color(0xFF92400E)
+val LowConfidenceHighlight = Color(0x40F59E0B)

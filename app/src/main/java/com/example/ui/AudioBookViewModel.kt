@@ -2,16 +2,23 @@ package com.example.ui
 
 import android.app.Application
 import android.net.Uri
+import android.speech.tts.Voice
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.data.db.AppDatabase
 import com.example.data.model.Book
 import com.example.data.model.BookParagraphEntity
-import com.example.data.model.ReadingStats
+import com.example.data.pdf.HistoricalOrthographyNormalizer
 import com.example.data.pdf.HybridPdfEngine
+import com.example.data.pdf.OcrEngineStatus
+import com.example.data.pdf.OcrLanguage
+import com.example.data.pdf.OcrProcessor
+import com.example.data.pdf.PreprocessingMode
+import com.example.data.pdf.TextQualityAnalyzer
 import com.example.data.repository.BookRepository
-import com.example.tts.TtsManager
-import com.example.tts.TtsVoiceInfo
+import com.example.tts.TextToSpeechManager
+import android.content.Context
+import com.example.data.model.ReadingStats
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -19,71 +26,82 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 enum class BookFilter {
-    TODOS, FAVORITOS, EN_PROGRESO, TERMINADOS
+    ALL, FAVORITES, OCR_SCANNED, FINISHED
 }
 
 enum class BookSort {
-    RECIENTES, TITULO, PROGRESO
-}
-
-enum class ReaderThemeMode {
-    OLED_DARK, MIDNIGHT_BLUE, SEPIA, SLATE
+    RECENT, TITLE, AUTHOR, PROGRESS
 }
 
 class AudioBookViewModel(application: Application) : AndroidViewModel(application) {
 
     private val db = AppDatabase.getInstance(application)
     private val repository = BookRepository(db.bookDao(), db.paragraphDao())
-    val ttsManager = TtsManager(application)
+    val ttsManager = TextToSpeechManager(application)
 
-    val allBooks = repository.allBooks.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
+    val allBooks: StateFlow<List<Book>> = repository.allBooks
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _searchQuery = MutableStateFlow("")
     val searchQuery: StateFlow<String> = _searchQuery.asStateFlow()
 
-    private val _currentFilter = MutableStateFlow(BookFilter.TODOS)
+    private val _currentFilter = MutableStateFlow(BookFilter.ALL)
     val currentFilter: StateFlow<BookFilter> = _currentFilter.asStateFlow()
 
-    private val _currentSort = MutableStateFlow(BookSort.RECIENTES)
+    private val _currentSort = MutableStateFlow(BookSort.RECENT)
     val currentSort: StateFlow<BookSort> = _currentSort.asStateFlow()
 
     val filteredBooks: StateFlow<List<Book>> = combine(
-        allBooks,
-        _searchQuery,
-        _currentFilter,
-        _currentSort
+        allBooks, _searchQuery, _currentFilter, _currentSort
     ) { books, query, filter, sort ->
-        var list = books.filter {
-            it.title.contains(query, ignoreCase = true) || it.author.contains(query, ignoreCase = true)
+        var list = books
+
+        if (query.isNotBlank()) {
+            list = list.filter {
+                it.title.contains(query, ignoreCase = true) || it.author.contains(query, ignoreCase = true)
+            }
         }
 
         list = when (filter) {
-            BookFilter.TODOS -> list
-            BookFilter.FAVORITOS -> list.filter { it.isFavorite }
-            BookFilter.EN_PROGRESO -> list.filter { it.progressPercent > 0f && it.progressPercent < 98f }
-            BookFilter.TERMINADOS -> list.filter { it.progressPercent >= 98f }
+            BookFilter.ALL -> list
+            BookFilter.FAVORITES -> list.filter { it.isFavorite }
+            BookFilter.OCR_SCANNED -> list.filter { it.isOcrProcessed }
+            BookFilter.FINISHED -> list.filter { it.progressPercent >= 0.99f }
         }
 
-        when (sort) {
-            BookSort.RECIENTES -> list.sortedByDescending { it.lastReadTimestamp }
-            BookSort.TITULO -> list.sortedBy { it.title.lowercase() }
-            BookSort.PROGRESO -> list.sortedByDescending { it.progressPercent }
+        list = when (sort) {
+            BookSort.RECENT -> list.sortedByDescending { it.lastReadTimestamp }
+            BookSort.TITLE -> list.sortedBy { it.title.lowercase() }
+            BookSort.AUTHOR -> list.sortedBy { it.author.lowercase() }
+            BookSort.PROGRESS -> list.sortedByDescending { it.progressPercent }
         }
-    }.stateIn(
-        scope = viewModelScope,
-        started = SharingStarted.WhileSubscribed(5000),
-        initialValue = emptyList()
-    )
 
-    // Player states
+        list
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val readingStats: StateFlow<ReadingStats> = allBooks.map { books ->
+        val total = books.size
+        val finished = books.count { it.progressPercent >= 0.95f || (it.totalPages > 1 && it.currentPage >= it.totalPages) }
+        val favorites = books.count { it.isFavorite }
+        val totalMinutes = books.sumOf { (it.currentParagraphIndex * 15) / 60 + (it.currentPage * 2) }
+        ReadingStats(
+            totalBooks = total,
+            totalFinished = finished,
+            totalReadingTimeMinutes = totalMinutes,
+            favoriteCount = favorites
+        )
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ReadingStats(0, 0, 0, 0))
+
+    // Bookmarks for active book
+    private val _bookmarkedPages = MutableStateFlow<Set<Int>>(emptySet())
+    val bookmarkedPages: StateFlow<Set<Int>> = _bookmarkedPages.asStateFlow()
+
+    // Active playback state
     private val _currentBook = MutableStateFlow<Book?>(null)
     val currentBook: StateFlow<Book?> = _currentBook.asStateFlow()
 
@@ -96,22 +114,21 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
     val isPlaying: StateFlow<Boolean> = ttsManager.isPlaying
     val speechRate: StateFlow<Float> = ttsManager.speechRate
     val speechPitch: StateFlow<Float> = ttsManager.speechPitch
-    val availableVoices: StateFlow<List<TtsVoiceInfo>> = ttsManager.availableVoices
-    val selectedVoice: StateFlow<TtsVoiceInfo?> = ttsManager.selectedVoice
+    val availableVoices: StateFlow<List<Voice>> = ttsManager.availableVoices
+    val selectedVoice: StateFlow<Voice?> = ttsManager.selectedVoice
 
-    // Reader UI appearance
-    private val _readerFontSize = MutableStateFlow(18f)
-    val readerFontSize: StateFlow<Float> = _readerFontSize.asStateFlow()
-
-    private val _readerTheme = MutableStateFlow(ReaderThemeMode.OLED_DARK)
-    val readerTheme: StateFlow<ReaderThemeMode> = _readerTheme.asStateFlow()
-
-    // Sleep timer
     private val _sleepTimerMinutesLeft = MutableStateFlow<Int?>(null)
     val sleepTimerMinutesLeft: StateFlow<Int?> = _sleepTimerMinutesLeft.asStateFlow()
     private var sleepTimerJob: Job? = null
 
-    // Import states
+    // Preferences
+    private val _readerFontSize = MutableStateFlow(18)
+    val readerFontSize: StateFlow<Int> = _readerFontSize.asStateFlow()
+
+    private val _readerTheme = MutableStateFlow("dark")
+    val readerTheme: StateFlow<String> = _readerTheme.asStateFlow()
+
+    // Import progress state
     private val _isImporting = MutableStateFlow(false)
     val isImporting: StateFlow<Boolean> = _isImporting.asStateFlow()
 
@@ -130,19 +147,21 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
     private val _isReprocessingPage = MutableStateFlow(false)
     val isReprocessingPage: StateFlow<Boolean> = _isReprocessingPage.asStateFlow()
 
-    private val _selectedOcrLanguage = MutableStateFlow(com.example.data.pdf.OcrLanguage.SPANISH)
-    val selectedOcrLanguage: StateFlow<com.example.data.pdf.OcrLanguage> = _selectedOcrLanguage.asStateFlow()
+    private val _selectedOcrLanguage = MutableStateFlow(OcrLanguage.SPANISH)
+    val selectedOcrLanguage: StateFlow<OcrLanguage> = _selectedOcrLanguage.asStateFlow()
 
-    private val _ocrEngineStatus = MutableStateFlow<com.example.data.pdf.OcrEngineStatus?>(null)
-    val ocrEngineStatus: StateFlow<com.example.data.pdf.OcrEngineStatus?> = _ocrEngineStatus.asStateFlow()
+    private val _selectedPreprocessingMode = MutableStateFlow(PreprocessingMode.VINTAGE_BOOK)
+    val selectedPreprocessingMode: StateFlow<PreprocessingMode> = _selectedPreprocessingMode.asStateFlow()
+
+    private val _ocrEngineStatus = MutableStateFlow<OcrEngineStatus?>(null)
+    val ocrEngineStatus: StateFlow<OcrEngineStatus?> = _ocrEngineStatus.asStateFlow()
 
     init {
         viewModelScope.launch {
             repository.ensureInitialSampleBooks()
-            _ocrEngineStatus.value = com.example.data.pdf.OcrProcessor.checkEngineStatus(application)
+            _ocrEngineStatus.value = OcrProcessor.checkEngineStatus(application)
         }
 
-        // Setup TTS callback for continuous reading of all paragraphs!
         ttsManager.onParagraphCompleted = {
             advanceToNextParagraph()
         }
@@ -187,81 +206,231 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
         }
     }
 
+    fun openBookForPdf(book: Book) {
+        viewModelScope.launch {
+            _currentBook.value = book
+            val paras = repository.getParagraphsForBookSync(book.id)
+            _currentParagraphs.value = paras
+            loadBookmarksForBook(book.id)
+        }
+    }
+
+    private fun loadBookmarksForBook(bookId: Long) {
+        val prefs = getApplication<Application>().getSharedPreferences("pdf_bookmarks", Context.MODE_PRIVATE)
+        val saved = prefs.getStringSet("book_$bookId", emptySet()) ?: emptySet()
+        _bookmarkedPages.value = saved.mapNotNull { it.toIntOrNull() }.toSet()
+    }
+
+    fun toggleBookmark(pageNumber: Int) {
+        val book = _currentBook.value ?: return
+        val current = _bookmarkedPages.value.toMutableSet()
+        if (current.contains(pageNumber)) {
+            current.remove(pageNumber)
+        } else {
+            current.add(pageNumber)
+        }
+        _bookmarkedPages.value = current
+        val prefs = getApplication<Application>().getSharedPreferences("pdf_bookmarks", Context.MODE_PRIVATE)
+        prefs.edit().putStringSet("book_${book.id}", current.map { it.toString() }.toSet()).apply()
+    }
+
+    fun saveCurrentPage(pageNumber: Int) {
+        val book = _currentBook.value ?: return
+        val totalPages = book.totalPages.coerceAtLeast(1)
+        val safePage = pageNumber.coerceIn(1, totalPages)
+        val progress = safePage.toFloat() / totalPages.toFloat()
+
+        val paras = _currentParagraphs.value
+        val matchedIdx = paras.indexOfFirst { it.pageNumber == safePage }.takeIf { it != -1 } ?: book.currentParagraphIndex
+
+        viewModelScope.launch {
+            repository.updateReadingProgress(book.id, matchedIdx, safePage, progress)
+            _currentBook.value = _currentBook.value?.copy(
+                currentPage = safePage,
+                currentParagraphIndex = matchedIdx,
+                progressPercent = progress
+            )
+        }
+    }
+
+    fun playPageTextWithTts(pageNumber: Int) {
+        val paras = _currentParagraphs.value
+        val pageParas = paras.filter { it.pageNumber == pageNumber }
+        if (pageParas.isNotEmpty()) {
+            val firstIdx = paras.indexOfFirst { it.pageNumber == pageNumber }
+            if (firstIdx != -1) {
+                playParagraph(firstIdx)
+            }
+        } else {
+            ttsManager.speak("Página $pageNumber. No hay texto reconocido para reproducir.")
+        }
+    }
+
     fun saveParagraphEdit(paragraphIndex: Int, newText: String) {
         val book = _currentBook.value ?: return
         viewModelScope.launch {
             repository.updateParagraphText(book.id, paragraphIndex, newText)
-            // Update in-memory list
             val updated = _currentParagraphs.value.map { p ->
                 if (p.paragraphIndex == paragraphIndex) {
-                    p.copy(text = newText, isUserEdited = true, extractionMethod = "MANUAL", isLowConfidence = false)
+                    p.copy(text = newText, isUserEdited = true)
                 } else p
             }
             _currentParagraphs.value = updated
         }
     }
 
-    /**
-     * Normalizes archaic spelling (e.g. "dixo" -> "dijo", "dexar" -> "dejar", long-s)
-     * across the current book's paragraphs for optimal TTS pronunciation without altering
-     * the underlying original scanned text.
-     */
     fun normalizeBookForNarration() {
-        val book = _currentBook.value ?: return
-        viewModelScope.launch {
-            val paras = _currentParagraphs.value
-            val normalized = paras.map { p ->
-                val smoothed = com.example.data.pdf.HistoricalOrthographyNormalizer.normalizeForNarration(
-                    text = p.text,
-                    language = _selectedOcrLanguage.value
-                )
-                p.copy(text = smoothed, isUserEdited = true)
-            }
-            _currentParagraphs.value = normalized
-            // Persist smoothed paragraphs to database
-            for (p in normalized) {
-                repository.updateParagraph(p)
-            }
+        val current = _currentParagraphs.value
+        if (current.isEmpty()) return
+        val updated = current.map { para ->
+            val modern = HistoricalOrthographyNormalizer.normalizeForNarration(para.text, _selectedOcrLanguage.value)
+            para.copy(text = modern, isUserEdited = true)
         }
+        _currentParagraphs.value = updated
     }
 
-    fun setOcrLanguage(lang: com.example.data.pdf.OcrLanguage) {
-        _selectedOcrLanguage.value = lang
+    fun setOcrLanguage(language: OcrLanguage) {
+        _selectedOcrLanguage.value = language
     }
 
-    private val _selectedPreprocessingMode = MutableStateFlow<com.example.data.pdf.PreprocessingMode>(com.example.data.pdf.PreprocessingMode.VINTAGE_BOOK)
-    val selectedPreprocessingMode: StateFlow<com.example.data.pdf.PreprocessingMode> = _selectedPreprocessingMode.asStateFlow()
-
-    fun setPreprocessingMode(mode: com.example.data.pdf.PreprocessingMode) {
+    fun setPreprocessingMode(mode: PreprocessingMode) {
         _selectedPreprocessingMode.value = mode
     }
 
     fun reprocessPageWithOcr(
         pageNumber: Int,
-        language: com.example.data.pdf.OcrLanguage = _selectedOcrLanguage.value,
-        mode: com.example.data.pdf.PreprocessingMode? = _selectedPreprocessingMode.value
+        language: OcrLanguage = _selectedOcrLanguage.value,
+        mode: PreprocessingMode = _selectedPreprocessingMode.value
     ) {
         val book = _currentBook.value ?: return
         viewModelScope.launch {
             _isReprocessingPage.value = true
             try {
-                val newParas = repository.reprocessPageWithOcr(
+                val updatedParas = repository.reprocessPageWithOcr(
                     context = getApplication(),
                     book = book,
                     pageNumber = pageNumber,
                     language = language,
                     forcedPreprocessing = mode
                 )
-                _currentParagraphs.value = newParas
-                val updatedBook = repository.getBookByIdSync(book.id)
-                if (updatedBook != null) {
-                    _currentBook.value = updatedBook
-                }
+                _currentParagraphs.value = updatedParas
             } catch (_: Exception) {
             } finally {
                 _isReprocessingPage.value = false
             }
         }
+    }
+
+    fun saveLensReaderDocument(
+        title: String,
+        paragraphs: List<String>,
+        imagePath: String?,
+        onSuccess: (Book) -> Unit
+    ) {
+        viewModelScope.launch {
+            val cleanTitle = title.ifBlank { "Lectura Lens" }
+            val book = Book(
+                title = cleanTitle,
+                author = "Lens Reader (OCR)",
+                filePath = imagePath ?: "",
+                coverPath = imagePath,
+                totalPages = 1,
+                totalParagraphs = paragraphs.size,
+                currentParagraphIndex = 0,
+                currentPage = 1,
+                progressPercent = 0f,
+                isFavorite = false,
+                isOcrProcessed = true,
+                hasLowConfidencePages = false,
+                ocrPageCount = 1,
+                digitalPageCount = 0
+            )
+
+            val paragraphEntities = paragraphs.mapIndexed { idx, pText ->
+                val qReport = TextQualityAnalyzer.evaluate(pText)
+                BookParagraphEntity(
+                    bookId = 0L,
+                    paragraphIndex = idx,
+                    pageNumber = 1,
+                    chapterTitle = "Página Reconocida",
+                    text = pText,
+                    originalText = pText,
+                    extractionMethod = "LENS_OCR",
+                    qualityScore = qReport.score,
+                    isLowConfidence = qReport.isCorrupted,
+                    isUserEdited = false
+                )
+            }
+
+            val newBookId = repository.insertImportedBook(book, paragraphEntities)
+            val insertedBook = repository.getBookByIdSync(newBookId) ?: book.copy(id = newBookId)
+            _currentBook.value = insertedBook
+            _currentParagraphs.value = paragraphEntities.map { it.copy(bookId = newBookId) }
+            _currentParagraphIndex.value = 0
+
+            onSuccess(insertedBook)
+        }
+    }
+
+    fun importPdf(uri: Uri, fileName: String, onSuccess: (Book) -> Unit) {
+        importJob?.cancel()
+        importJob = viewModelScope.launch {
+            _isImporting.value = true
+            _importProgress.value = 0f
+            _importStatusText.value = "Iniciando análisis del PDF..."
+            _importErrorMessage.value = null
+
+            try {
+                val result = HybridPdfEngine.processPdf(
+                    context = getApplication(),
+                    pdfUri = uri,
+                    originalFileName = fileName,
+                    selectedLanguage = _selectedOcrLanguage.value
+                ) { page, total, statusText ->
+                    _importProgress.value = if (total > 0) page.toFloat() / total.toFloat() else 0f
+                    _importStatusText.value = statusText
+                }
+
+                val book = Book(
+                    title = result.title,
+                    author = result.author,
+                    filePath = result.localFilePath.ifBlank { uri.toString() },
+                    totalPages = result.totalPages,
+                    totalParagraphs = result.paragraphs.size,
+                    currentParagraphIndex = 0,
+                    currentPage = 1,
+                    progressPercent = 0f,
+                    isOcrProcessed = result.ocrPageCount > 0,
+                    hasLowConfidencePages = result.hasLowConfidencePages,
+                    ocrPageCount = result.ocrPageCount,
+                    digitalPageCount = result.digitalPageCount
+                )
+
+                val newBookId = repository.insertImportedBook(book, result.paragraphs)
+                val insertedBook = repository.getBookByIdSync(newBookId) ?: book.copy(id = newBookId)
+
+                _currentBook.value = insertedBook
+                _currentParagraphs.value = result.paragraphs.map { it.copy(bookId = newBookId) }
+                _currentParagraphIndex.value = 0
+
+                _isImporting.value = false
+                onSuccess(insertedBook)
+            } catch (e: Exception) {
+                _isImporting.value = false
+                _importErrorMessage.value = "No se pudo procesar el archivo: ${e.message ?: "Formato no compatible"}"
+            }
+        }
+    }
+
+    fun cancelImport() {
+        importJob?.cancel()
+        _isImporting.value = false
+        _importProgress.value = 0f
+        _importStatusText.value = ""
+    }
+
+    fun clearImportError() {
+        _importErrorMessage.value = null
     }
 
     fun togglePlayPause() {
@@ -274,11 +443,11 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
 
     fun playParagraph(index: Int) {
         val paras = _currentParagraphs.value
-        if (paras.isEmpty()) return
-        val clamped = index.coerceIn(0, paras.size - 1)
-        _currentParagraphIndex.value = clamped
-        saveProgress(clamped)
-        playCurrentParagraph()
+        if (index in paras.indices) {
+            _currentParagraphIndex.value = index
+            updateProgressInDb(index)
+            playCurrentParagraph()
+        }
     }
 
     private fun playCurrentParagraph() {
@@ -286,43 +455,36 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
         val idx = _currentParagraphIndex.value
         if (idx in paras.indices) {
             val textToSpeak = paras[idx].text
-            ttsManager.speakParagraph(textToSpeak, "para_$idx")
-            saveProgress(idx)
+            ttsManager.speak(textToSpeak)
+            updateProgressInDb(idx)
         }
     }
 
     private fun advanceToNextParagraph() {
-        viewModelScope.launch {
-            val paras = _currentParagraphs.value
-            val currentIdx = _currentParagraphIndex.value
-            if (currentIdx + 1 < paras.size) {
-                val nextIdx = currentIdx + 1
-                _currentParagraphIndex.value = nextIdx
-                saveProgress(nextIdx)
-                delay(120)
-                playCurrentParagraph()
-            } else {
-                // Book completed!
-                ttsManager.stop()
-                _currentBook.value?.let { b ->
-                    repository.updateReadingProgress(b.id, currentIdx, b.totalPages, 100f)
-                }
-            }
+        val paras = _currentParagraphs.value
+        val nextIdx = _currentParagraphIndex.value + 1
+        if (nextIdx < paras.size) {
+            _currentParagraphIndex.value = nextIdx
+            updateProgressInDb(nextIdx)
+            playCurrentParagraph()
+        } else {
+            ttsManager.stop()
+            _currentParagraphIndex.value = paras.size - 1
+            updateProgressInDb(paras.size - 1)
         }
     }
 
     fun nextParagraph() {
-        val paras = _currentParagraphs.value
-        if (paras.isEmpty()) return
-        val nextIdx = (_currentParagraphIndex.value + 1).coerceAtMost(paras.size - 1)
-        playParagraph(nextIdx)
+        advanceToNextParagraph()
     }
 
     fun previousParagraph() {
-        val paras = _currentParagraphs.value
-        if (paras.isEmpty()) return
         val prevIdx = (_currentParagraphIndex.value - 1).coerceAtLeast(0)
-        playParagraph(prevIdx)
+        _currentParagraphIndex.value = prevIdx
+        updateProgressInDb(prevIdx)
+        if (isPlaying.value) {
+            playCurrentParagraph()
+        }
     }
 
     fun skipForward15Sec() {
@@ -336,104 +498,44 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
     fun nextChapter() {
         val paras = _currentParagraphs.value
         val currentIdx = _currentParagraphIndex.value
-        if (currentIdx !in paras.indices) return
-        val currentChapter = paras[currentIdx].chapterTitle
+        val currentChapter = paras.getOrNull(currentIdx)?.chapterTitle ?: ""
         val nextChapterIdx = paras.indexOfFirst { it.paragraphIndex > currentIdx && it.chapterTitle != currentChapter }
         if (nextChapterIdx != -1) {
             playParagraph(nextChapterIdx)
-        } else {
-            nextParagraph()
         }
     }
 
     fun previousChapter() {
         val paras = _currentParagraphs.value
         val currentIdx = _currentParagraphIndex.value
-        if (currentIdx !in paras.indices) return
-        val currentChapter = paras[currentIdx].chapterTitle
+        val currentChapter = paras.getOrNull(currentIdx)?.chapterTitle ?: ""
         val prevChapterIdx = paras.indexOfLast { it.paragraphIndex < currentIdx && it.chapterTitle != currentChapter }
         if (prevChapterIdx != -1) {
-            val targetChapter = paras[prevChapterIdx].chapterTitle
-            val startOfChapter = paras.indexOfFirst { it.chapterTitle == targetChapter }
-            playParagraph(if (startOfChapter != -1) startOfChapter else prevChapterIdx)
-        } else {
-            previousParagraph()
+            playParagraph(prevChapterIdx)
         }
     }
 
-    private fun saveProgress(index: Int) {
+    private fun updateProgressInDb(paragraphIndex: Int) {
         val book = _currentBook.value ?: return
-        val paras = _currentParagraphs.value
-        if (paras.isEmpty()) return
-
-        val percent = ((index + 1).toFloat() / paras.size.toFloat() * 100f).coerceIn(0f, 100f)
-        val currentPage = paras.getOrNull(index)?.pageNumber ?: 1
+        val total = _currentParagraphs.value.size
+        val progress = if (total > 0) paragraphIndex.toFloat() / total.toFloat() else 0f
+        val page = _currentParagraphs.value.getOrNull(paragraphIndex)?.pageNumber ?: 1
 
         viewModelScope.launch {
-            repository.updateReadingProgress(
-                bookId = book.id,
-                paragraphIndex = index,
-                page = currentPage,
-                progressPercent = percent
-            )
-            _currentBook.value = book.copy(
-                currentParagraphIndex = index,
-                currentPage = currentPage,
-                progressPercent = percent
+            repository.updateReadingProgress(book.id, paragraphIndex, page, progress)
+            _currentBook.value = _currentBook.value?.copy(
+                currentParagraphIndex = paragraphIndex,
+                currentPage = page,
+                progressPercent = progress
             )
         }
-    }
-
-    fun setSpeechRate(rate: Float) {
-        ttsManager.setSpeechRate(rate)
-    }
-
-    fun setSpeechPitch(pitch: Float) {
-        ttsManager.setPitch(pitch)
-    }
-
-    fun setVoice(voice: TtsVoiceInfo) {
-        ttsManager.setVoice(voice)
-    }
-
-    fun playSampleVoice(voice: TtsVoiceInfo) {
-        ttsManager.playSampleVoice(voice)
-    }
-
-    fun setReaderFontSize(size: Float) {
-        _readerFontSize.value = size.coerceIn(12f, 32f)
-    }
-
-    fun setReaderTheme(theme: ReaderThemeMode) {
-        _readerTheme.value = theme
-    }
-
-    fun startSleepTimer(minutes: Int) {
-        sleepTimerJob?.cancel()
-        _sleepTimerMinutesLeft.value = minutes
-        sleepTimerJob = viewModelScope.launch {
-            var remaining = minutes
-            while (remaining > 0) {
-                delay(60_000L)
-                remaining--
-                _sleepTimerMinutesLeft.value = remaining
-            }
-            ttsManager.stop()
-            _sleepTimerMinutesLeft.value = null
-        }
-    }
-
-    fun cancelSleepTimer() {
-        sleepTimerJob?.cancel()
-        _sleepTimerMinutesLeft.value = null
     }
 
     fun toggleFavorite(book: Book) {
         viewModelScope.launch {
-            val newFav = !book.isFavorite
-            repository.toggleFavorite(book.id, newFav)
+            repository.toggleFavorite(book.id)
             if (_currentBook.value?.id == book.id) {
-                _currentBook.value = _currentBook.value?.copy(isFavorite = newFav)
+                _currentBook.value = _currentBook.value?.copy(isFavorite = !book.isFavorite)
             }
         }
     }
@@ -445,76 +547,58 @@ class AudioBookViewModel(application: Application) : AndroidViewModel(applicatio
                 _currentBook.value = null
                 _currentParagraphs.value = emptyList()
             }
-            repository.deleteBook(book)
+            repository.deleteBook(book.id)
         }
     }
 
-    fun importPdf(uri: Uri, fileName: String, onImportFinished: (Book) -> Unit) {
-        importJob?.cancel()
-        importJob = viewModelScope.launch {
-            _isImporting.value = true
-            _importErrorMessage.value = null
-            _importProgress.value = 0.05f
-            _importStatusText.value = "Iniciando análisis inteligente..."
+    fun setSpeechRate(rate: Float) {
+        ttsManager.setSpeechRate(rate)
+    }
 
-            try {
-                val result = HybridPdfEngine.processPdf(
-                    context = getApplication(),
-                    pdfUri = uri,
-                    originalFileName = fileName,
-                    ocrLanguage = _selectedOcrLanguage.value
-                ) { status, progress ->
-                    _importStatusText.value = status
-                    _importProgress.value = progress
-                }
+    fun setSpeechPitch(pitch: Float) {
+        ttsManager.setSpeechPitch(pitch)
+    }
 
-                val newBook = Book(
-                    title = result.title,
-                    author = result.author,
-                    filePath = uri.toString(),
-                    coverPath = result.coverPath,
-                    totalPages = result.totalPages,
-                    totalParagraphs = result.paragraphs.size,
-                    currentParagraphIndex = 0,
-                    currentPage = 1,
-                    progressPercent = 0f,
-                    isFavorite = false,
-                    isOcrProcessed = result.ocrPageCount > 0,
-                    hasLowConfidencePages = result.hasLowConfidencePages,
-                    ocrPageCount = result.ocrPageCount,
-                    digitalPageCount = result.digitalPageCount
-                )
+    fun setVoice(voice: Voice) {
+        ttsManager.setVoice(voice)
+    }
 
-                val newId = repository.insertImportedBook(newBook, result.paragraphs)
-                val insertedBook = newBook.copy(id = newId)
+    fun playSampleVoice(voice: Voice) {
+        ttsManager.setVoice(voice)
+        ttsManager.speak("Esta es una muestra de voz para AudioBook Reader.")
+    }
 
-                _currentBook.value = insertedBook
-                _currentParagraphs.value = result.paragraphs
-                _currentParagraphIndex.value = 0
-                _isImporting.value = false
+    fun startSleepTimer(minutes: Int) {
+        sleepTimerJob?.cancel()
+        _sleepTimerMinutesLeft.value = minutes
 
-                onImportFinished(insertedBook)
-            } catch (e: Exception) {
-                _isImporting.value = false
-                _importErrorMessage.value = "Error al procesar el PDF: ${e.localizedMessage ?: "Formato no válido o protegido"}"
+        sleepTimerJob = viewModelScope.launch {
+            var mins = minutes
+            while (mins > 0) {
+                delay(60_000)
+                mins--
+                _sleepTimerMinutesLeft.value = mins
             }
+            ttsManager.stop()
+            _sleepTimerMinutesLeft.value = null
         }
     }
 
-    fun cancelImport() {
-        importJob?.cancel()
-        _isImporting.value = false
-        _importStatusText.value = "Importación cancelada"
+    fun cancelSleepTimer() {
+        sleepTimerJob?.cancel()
+        _sleepTimerMinutesLeft.value = null
     }
 
-    fun clearImportError() {
-        _importErrorMessage.value = null
+    fun setReaderFontSize(size: Int) {
+        _readerFontSize.value = size.coerceIn(12, 32)
+    }
+
+    fun setReaderTheme(theme: String) {
+        _readerTheme.value = theme
     }
 
     override fun onCleared() {
         super.onCleared()
-        importJob?.cancel()
-        sleepTimerJob?.cancel()
-        ttsManager.shutdown()
+        ttsManager.release()
     }
 }

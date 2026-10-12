@@ -9,7 +9,7 @@ import com.example.data.model.BookParagraphEntity
 
 @Database(
     entities = [Book::class, BookParagraphEntity::class],
-    version = 2,
+    version = 1,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {

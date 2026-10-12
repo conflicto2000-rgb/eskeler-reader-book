@@ -1,99 +1,68 @@
 package com.example.data.pdf
 
-/**
- * Normalizer for archaic spelling, historical orthography, ligatures,
- * long-s (ſ), and archaic abbreviations commonly found in 16th-19th century printed books.
- *
- * IMPORTANT DESIGN GOAL:
- * - Keeps original extracted text fully intact in [BookParagraphEntity.originalText].
- * - Provides non-destructive normalized text for TTS narration so speech engines
- *   (e.g. Spanish & English TTS) pronounce archaic characters naturally instead of stumbling.
- */
 object HistoricalOrthographyNormalizer {
 
-    // Common historical print ligatures and archaic typography symbols
-    private val HISTORICAL_GLYPH_REPLACEMENTS = listOf(
-        // Long 's' (ſ) common in books printed before the 19th century
-        // e.g. "preſente" -> "presente", "eſtado" -> "estado", "cauſa" -> "causa"
+    private val GLYPH_REPLACEMENTS = listOf(
+        // Long-s variants
         "ſ" to "s",
         "ẛ" to "s",
-
-        // Historical ligatures
+        "ﬅ" to "st",
         "ﬆ" to "st",
-        "ﬅ" to "ft",
-        "ﬃ" to "ffi",
-        "ﬄ" to "ffl",
+
+        // Historical Latin / Spanish ligatures
+        "æ" to "ae",
+        "Æ" to "Ae",
+        "œ" to "oe",
+        "Œ" to "Oe",
         "ﬀ" to "ff",
         "ﬁ" to "fi",
         "ﬂ" to "fl",
-        "ꝛ" to "r",  // r rotunda
-        "æ" to "ae",
-        "Æ" to "AE",
-        "œ" to "oe",
-        "Œ" to "OE",
-        "&c." to "etc.",
-        "&c" to "etc.",
+        "ﬃ" to "ffi",
+        "ﬄ" to "ffl",
 
-        // Archaic tilde abbreviations on vowels (e.g. q̃ -> que, d̃ -> de)
+        // Archaic tilde abbreviations (e.g. q̃ -> que)
         "q̃" to "que",
         "Q̃" to "Que",
-        "q̄" to "que",
-        "d̃" to "de",
-        "m̃" to "men",
-        "ñ" to "nn"
+        "p̃" to "para",
+        "d̃" to "de"
     )
 
-    // Spanish Golden Age & 18th-century common orthography adaptations for TTS fluidity:
-    // (e.g. "dexar" -> "dejar", "dixo" -> "dijo", "fazer" -> "hacer", "fabló" -> "habló")
-    // When enabled as an optional normalization, it assists TTS in pronouncing archaic texts smoothly.
     private val SPANISH_ARCHAIC_PATTERNS = listOf(
-        // 'x' for modern 'j' in classic Spanish verbal forms and nouns
         Regex("\\b(d)ix([a-zñáéíóú]+)\\b", RegexOption.IGNORE_CASE) to "$1ij$2",
         Regex("\\b(d)ex([a-zñáéíóú]+)\\b", RegexOption.IGNORE_CASE) to "$1ej$2",
         Regex("\\b(t)rax([a-zñáéíóú]+)\\b", RegexOption.IGNORE_CASE) to "$1raj$2",
-        Regex("\\b(c)on[sſ]exo\\b", RegexOption.IGNORE_CASE) to "$1onsejo",
-        Regex("\\b(e)xemplo\\b", RegexOption.IGNORE_CASE) to "$1jemplo",
-        Regex("\\b(l)exos\\b", RegexOption.IGNORE_CASE) to "$1ejos",
-        Regex("\\b(m)uger\\b", RegexOption.IGNORE_CASE) to "$1ujer",
-        Regex("\\b(q)ual\\b", RegexOption.IGNORE_CASE) to "$1ual",
-        Regex("\\b(q)uando\\b", RegexOption.IGNORE_CASE) to "$1uando",
-        Regex("\\b(q)uanto\\b", RegexOption.IGNORE_CASE) to "$1uanto",
-        Regex("\\b(y)glesia\\b", RegexOption.IGNORE_CASE) to "$1glesia",
-        Regex("\\b(c)ibdad\\b", RegexOption.IGNORE_CASE) to "$1iudad"
+        Regex("\\b(f)a(z|ç)er\\b", RegexOption.IGNORE_CASE) to "$1acer",
+        Regex("\\b(f)a(z|ç)e\\b", RegexOption.IGNORE_CASE) to "$1ace",
+        Regex("\\b(f)a(z|ç)en\\b", RegexOption.IGNORE_CASE) to "$1acen",
+        Regex("\\b(f)echo\\b", RegexOption.IGNORE_CASE) to "hecho",
+        Regex("\\b(f)abl([a-zñáéíóú]+)\\b", RegexOption.IGNORE_CASE) to "habl$2",
+        Regex("\\b(f)all([a-zñáéíóú]+)\\b", RegexOption.IGNORE_CASE) to "hall$2",
+        Regex("\\b(v)n([a-zñáéíóú]*)\\b", RegexOption.IGNORE_CASE) to "$1n$2",
+        Regex("\\b(v)no\\b", RegexOption.IGNORE_CASE) to "uno",
+        Regex("\\b(v)na\\b", RegexOption.IGNORE_CASE) to "una",
+        Regex("\\b(v)nos\\b", RegexOption.IGNORE_CASE) to "unos",
+        Regex("\\b(v)nas\\b", RegexOption.IGNORE_CASE) to "unas",
+        Regex("\\b(v)niversidad\\b", RegexOption.IGNORE_CASE) to "universidad",
+        Regex("\\b(v)no(s)?\\b", RegexOption.IGNORE_CASE) to "uno$2"
     )
 
-    /**
-     * Replaces historical glyphs (long-s, ligatures, typography abbreviations)
-     * without altering original words. Safe for all documents.
-     */
     fun normalizeGlyphs(text: String): String {
-        if (text.isBlank()) return text
         var result = text
-        for ((glyph, replacement) in HISTORICAL_GLYPH_REPLACEMENTS) {
-            result = result.replace(glyph, replacement)
+        for ((from, to) in GLYPH_REPLACEMENTS) {
+            if (result.contains(from)) {
+                result = result.replace(from, to)
+            }
         }
         return result
     }
 
-    /**
-     * Normalizes archaic spelling specifically for TTS narration fluency,
-     * allowing modern speech synthesizers to pronounce classical texts naturally.
-     */
-    fun normalizeForNarration(text: String, language: OcrLanguage): String {
-        var normalized = normalizeGlyphs(text)
-
-        if (language == OcrLanguage.SPANISH || language == OcrLanguage.AUTO) {
+    fun normalizeForNarration(text: String, language: OcrLanguage = OcrLanguage.SPANISH): String {
+        var processed = normalizeGlyphs(text)
+        if (language == OcrLanguage.SPANISH) {
             for ((pattern, replacement) in SPANISH_ARCHAIC_PATTERNS) {
-                normalized = pattern.replace(normalized, replacement)
+                processed = pattern.replace(processed, replacement)
             }
         }
-
-        // Clean typography dashes and double hyphens
-        normalized = normalized.replace("—", " — ")
-            .replace("--", "—")
-            .replace(Regex("\\s+"), " ")
-            .trim()
-
-        return normalized
+        return processed
     }
 }

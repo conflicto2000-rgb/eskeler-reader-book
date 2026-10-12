@@ -38,7 +38,7 @@ data class BookParagraphEntity(
     val chapterTitle: String,
     val text: String,
     val originalText: String = text,
-    val extractionMethod: String = "DIGITAL", // "DIGITAL", "OCR", "HYBRID", "MANUAL"
+    val extractionMethod: String = "DIGITAL", // "DIGITAL", "OCR", "HYBRID", "LENS_OCR", "MANUAL"
     val qualityScore: Float = 1.0f,
     val isLowConfidence: Boolean = false,
     val isUserEdited: Boolean = false
@@ -52,5 +52,5 @@ data class ReadingStats(
 )
 
 enum class ExtractionSource {
-    DIGITAL, OCR, HYBRID, MANUAL
+    DIGITAL, OCR, HYBRID, LENS_OCR, MANUAL
 }

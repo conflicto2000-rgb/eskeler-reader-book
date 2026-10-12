@@ -8,8 +8,17 @@ import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
-import kotlinx.coroutines.tasks.await
+import com.google.android.gms.tasks.Task
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlin.math.abs
+
+private suspend fun <T> Task<T>.await(): T = suspendCancellableCoroutine { cont ->
+    addOnSuccessListener { cont.resume(it) }
+    addOnFailureListener { cont.resumeWithException(it) }
+    addOnCanceledListener { cont.cancel() }
+}
 
 enum class OcrLanguage(val code: String, val displayName: String, val compatibilityNote: String) {
     SPANISH("es", "Español", "Alfabeto latino con tildes, ñ y signos ¿?. Totalmente compatible."),
@@ -41,33 +50,17 @@ data class OcrPageResult(
     val preprocessingUsed: PreprocessingMode = PreprocessingMode.STANDARD,
     val detectedAngle: Float = 0f
 ) {
-    /**
-     * Genuine confidence metric:
-     * - Returns engine-reported confidence if provided by ML Kit.
-     * - Otherwise returns justifiable linguistic quality score evaluated by TextQualityAnalyzer.
-     * Never fabricates unverified random scores.
-     */
     val averageConfidence: Float
         get() = nativeConfidence ?: qualityScore
 }
 
-/**
- * Advanced OCR Processor designed for high-accuracy recognition of both standard PDFs,
- * camera photos, and scanned antique books, high-serif typography, aged yellowed paper,
- * and faded print.
- */
 object OcrProcessor {
     private const val TAG = "OcrProcessor"
 
-    // On-device ML Kit Latin script recognizer.
-    // Operates 100% locally and offline without external network dependency.
     private val recognizer by lazy {
         TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
     }
 
-    /**
-     * Checks if the on-device OCR engine is operational and provides truthful capabilities information.
-     */
     suspend fun checkEngineStatus(context: Context): OcrEngineStatus {
         return try {
             val testBmp = Bitmap.createBitmap(64, 64, Bitmap.Config.ARGB_8888)
@@ -90,17 +83,12 @@ object OcrProcessor {
                 isLocalOffline = true,
                 engineName = "Google ML Kit Text Recognition",
                 supportedLanguagesSummary = "Español y alfabetos latinos",
-                historicalTypographySummary = "Filtros de restauración histórica",
+                historicalTypographySummary = "Filtros de restauración histórica para alfabetos latinos. Nota: ML Kit no incluye modelo específico para tipografía Fraktur/gótica pura.",
                 instructions = "El motor OCR se está inicializando. Es 100% local y no requiere conexión a internet ni descargas adicionales."
             )
         }
     }
 
-    /**
-     * Recognizes text from a rendered [PdfRenderer.Page].
-     * Renders at an optimal resolution (1400 - 2200px width for antique small prints and fine serifs),
-     * applies multi-stage adaptive preprocessing if needed, and ensures memory cleanup.
-     */
     suspend fun recognizePage(
         page: PdfRenderer.Page,
         pageNumber: Int,
@@ -115,7 +103,6 @@ object OcrProcessor {
             rawBitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
             page.render(rawBitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-            // Trim dark scanner borders first
             val trimmedBitmap = ImagePreprocessor.trimScannerBorders(rawBitmap)
 
             return recognizeBitmapAdaptive(
@@ -140,18 +127,6 @@ object OcrProcessor {
         }
     }
 
-    /**
-     * Adaptive OCR Pipeline:
-     * 1. If [forcedPreprocessing] is provided, executes that filter directly.
-     * 2. Otherwise runs initial recognition on standard contrast enhancement.
-     * 3. Evaluates quality with [TextQualityAnalyzer].
-     * 4. Detects skew/rotation angle: if tilted, deskews and retests.
-     * 5. If quality is low or suspicious (frequent in vintage books with yellowed background or faint ink):
-     *    - Tries [PreprocessingMode.VINTAGE_BOOK] (yellow page neutralizer)
-     *    - If still deficient, tries [PreprocessingMode.ADAPTIVE_BINARIZATION]
-     *    - Tries [PreprocessingMode.SHARPEN_FINE] (for faint serifs)
-     * 6. Chooses the candidate with highest justified linguistic quality score without modifying original bitmaps.
-     */
     suspend fun recognizeBitmapAdaptive(
         bitmap: Bitmap,
         pageNumber: Int,
@@ -165,11 +140,9 @@ object OcrProcessor {
             return result
         }
 
-        // Pass 1: Standard contrast enhancement
         val standardBmp = ImagePreprocessor.preprocess(bitmap, PreprocessingMode.STANDARD)
         var standardResult = recognizeBitmapDirect(standardBmp, pageNumber, language, PreprocessingMode.STANDARD)
 
-        // Skew correction if text is tilted
         if (abs(standardResult.detectedAngle) > 2.0f && abs(standardResult.detectedAngle) < 45.0f) {
             val deskewedBmp = ImagePreprocessor.deskew(standardBmp, standardResult.detectedAngle)
             val deskewedResult = recognizeBitmapDirect(deskewedBmp, pageNumber, language, PreprocessingMode.STANDARD)
@@ -182,30 +155,25 @@ object OcrProcessor {
 
         val standardQuality = TextQualityAnalyzer.evaluate(standardResult.fullText)
 
-        // If standard pass scored well (score >= 0.75, plenty of words, not corrupt), return immediately
         if (standardQuality.score >= 0.75f && standardQuality.totalWords >= 15 && !standardQuality.isCorrupted) {
             return standardResult
         }
 
-        // Pass 2: Vintage Book filter (whitens yellowed background, sharpens faded ink)
         val vintageBmp = ImagePreprocessor.preprocess(bitmap, PreprocessingMode.VINTAGE_BOOK)
         val vintageResult = recognizeBitmapDirect(vintageBmp, pageNumber, language, PreprocessingMode.VINTAGE_BOOK)
         vintageBmp.recycle()
         val vintageQuality = TextQualityAnalyzer.evaluate(vintageResult.fullText)
 
-        // Pass 3: Adaptive Binarization (local thresholding)
         val binarizedBmp = ImagePreprocessor.preprocess(bitmap, PreprocessingMode.ADAPTIVE_BINARIZATION)
         val binarizedResult = recognizeBitmapDirect(binarizedBmp, pageNumber, language, PreprocessingMode.ADAPTIVE_BINARIZATION)
         binarizedBmp.recycle()
         val binarizedQuality = TextQualityAnalyzer.evaluate(binarizedResult.fullText)
 
-        // Pass 4: Fine stroke sharpening for faint serifs
         val sharpenBmp = ImagePreprocessor.preprocess(bitmap, PreprocessingMode.SHARPEN_FINE)
         val sharpenResult = recognizeBitmapDirect(sharpenBmp, pageNumber, language, PreprocessingMode.SHARPEN_FINE)
         sharpenBmp.recycle()
         val sharpenQuality = TextQualityAnalyzer.evaluate(sharpenResult.fullText)
 
-        // Compare all candidates using justified linguistic quality score and legitimate word ratio
         val candidates = listOf(
             Triple(standardResult, standardQuality, PreprocessingMode.STANDARD),
             Triple(vintageResult, vintageQuality, PreprocessingMode.VINTAGE_BOOK),
@@ -221,9 +189,6 @@ object OcrProcessor {
         return bestCandidate?.first ?: standardResult
     }
 
-    /**
-     * Executes ML Kit text recognition on a specific bitmap.
-     */
     suspend fun recognizeBitmapDirect(
         bitmap: Bitmap,
         pageNumber: Int,
@@ -240,9 +205,6 @@ object OcrProcessor {
         }
     }
 
-    /**
-     * Backwards-compatible recognition method.
-     */
     suspend fun recognizeBitmap(
         bitmap: Bitmap,
         pageNumber: Int,
@@ -263,7 +225,6 @@ object OcrProcessor {
             return OcrPageResult("", emptyList(), null, 0.0f, false, 0, mode)
         }
 
-        // Two-column layout detection
         val midpoint = pageWidth / 2
         var leftCount = 0
         var rightCount = 0
@@ -272,7 +233,6 @@ object OcrProcessor {
         var sumAngle = 0f
         var angleLines = 0
 
-        // Extract engine-reported token confidence if provided by ML Kit
         var sumConfidence = 0.0f
         var elementsWithConfidence = 0
 
@@ -293,7 +253,6 @@ object OcrProcessor {
             }
 
             for (line in block.lines) {
-                // Check line angle for skew detection
                 val angle = try {
                     val m = line.javaClass.getMethod("getAngle")
                     (m.invoke(line) as? Number)?.toFloat() ?: 0f
@@ -305,7 +264,6 @@ object OcrProcessor {
                     angleLines++
                 }
 
-                // Check element confidence if exposed by ML Kit
                 for (element in line.elements) {
                     val conf = try {
                         val m = element.javaClass.getMethod("getConfidence")
@@ -325,7 +283,6 @@ object OcrProcessor {
         val nativeConfidence = if (elementsWithConfidence > 0) sumConfidence / elementsWithConfidence else null
         val isMultiColumn = leftCount >= 2 && rightCount >= 2 && spanningCount <= 2
 
-        // Sort blocks in natural reading order
         val sortedBlocks = if (isMultiColumn) {
             val leftColumn = blocks.filter { (it.boundingBox?.left ?: 0) < midpoint }
                 .sortedBy { it.boundingBox?.top ?: 0 }
@@ -345,12 +302,8 @@ object OcrProcessor {
         }
 
         val rawStr = assembledText.toString().trim()
-
-        // 1. Reconstruct paragraphs (un-hyphenate line breaks, trim page numbers)
         val reconstructed = TextReconstructor.reconstruct(rawStr, null, pageNumber)
 
-        // 2. Normalize historical typography glyphs (s-larga 'ſ', ligaduras históricas)
-        // while preserving original spelling
         val normalizedParas = reconstructed.map { para ->
             HistoricalOrthographyNormalizer.normalizeGlyphs(para)
         }

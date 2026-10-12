@@ -63,16 +63,24 @@ class BookRepository(
         )
     }
 
-    suspend fun updateParagraphText(
-        bookId: Long,
-        paragraphIndex: Int,
-        newText: String
-    ) {
-        paragraphDao.updateParagraphText(bookId, paragraphIndex, newText)
+    suspend fun toggleFavorite(bookId: Long) {
+        bookDao.toggleFavorite(bookId)
     }
 
-    suspend fun updateParagraph(paragraph: BookParagraphEntity) {
-        paragraphDao.updateParagraph(paragraph)
+    suspend fun deleteBook(bookId: Long) {
+        val book = bookDao.getBookByIdSync(bookId)
+        if (book != null && book.filePath.isNotBlank()) {
+            try {
+                val file = File(book.filePath)
+                if (file.exists()) file.delete()
+            } catch (_: Exception) {}
+        }
+        paragraphDao.deleteParagraphsForBook(bookId)
+        bookDao.deleteBook(bookId)
+    }
+
+    suspend fun updateParagraphText(bookId: Long, paragraphIndex: Int, newText: String) {
+        paragraphDao.updateParagraphText(bookId, paragraphIndex, newText)
     }
 
     suspend fun reprocessPageWithOcr(
@@ -92,54 +100,14 @@ class BookRepository(
         )
 
         if (newParas.isNotEmpty()) {
-            // Retrieve all current paragraphs for this book
-            val allCurrent = paragraphDao.getParagraphsForBookSync(book.id).toMutableList()
-            // Replace paragraphs for this page
-            allCurrent.removeAll { it.pageNumber == pageNumber }
-            allCurrent.addAll(newParas)
-            // Re-index all paragraphs to keep sequential indices
-            val reIndexed = allCurrent.sortedWith(
-                compareBy<BookParagraphEntity> { it.pageNumber }.thenBy { it.paragraphIndex }
-            ).mapIndexed { idx, p -> p.copy(paragraphIndex = idx) }
-
-            // Replace in database
-            paragraphDao.deleteParagraphsForBook(book.id)
-            paragraphDao.insertParagraphs(reIndexed)
-
-            val hasLowConf = reIndexed.any { it.isLowConfidence }
-            bookDao.updateBookProcessingStats(
-                bookId = book.id,
-                totalParas = reIndexed.size,
-                hasLowConf = hasLowConf,
-                ocrPages = book.ocrPageCount + 1,
-                digitalPages = (book.digitalPageCount - 1).coerceAtLeast(0),
-                isOcr = true
-            )
-            return reIndexed
+            val existingParas = paragraphDao.getParagraphsForBookSync(book.id)
+            val updatedList = existingParas.map { existing ->
+                val matched = newParas.find { it.paragraphIndex == existing.paragraphIndex && it.pageNumber == pageNumber }
+                matched ?: existing
+            }
+            paragraphDao.insertParagraphs(updatedList)
+            return updatedList
         }
         return paragraphDao.getParagraphsForBookSync(book.id)
-    }
-
-    suspend fun toggleFavorite(bookId: Long, isFavorite: Boolean) {
-        bookDao.toggleFavorite(bookId, isFavorite)
-    }
-
-    suspend fun deleteBook(book: Book) {
-        paragraphDao.deleteParagraphsForBook(book.id)
-        bookDao.deleteBook(book)
-        // Clean up cover image if created
-        book.coverPath?.let { path ->
-            try {
-                val file = File(path)
-                if (file.exists()) file.delete()
-            } catch (_: Exception) {}
-        }
-        // Clean up PDF copy
-        if (!book.filePath.startsWith("sample://")) {
-            try {
-                val file = File(book.filePath)
-                if (file.exists()) file.delete()
-            } catch (_: Exception) {}
-        }
     }
 }
